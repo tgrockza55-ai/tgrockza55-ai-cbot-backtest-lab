@@ -19,17 +19,18 @@ param(
     [Nullable[double]]$P1, [Nullable[double]]$P2, [Nullable[double]]$P3, [Nullable[double]]$P4,
     [Nullable[double]]$Lots, [Nullable[double]]$StopLossPips, [Nullable[double]]$TakeProfitPips,
     [double]$Balance = 1000,
-    [string]$DataMode = "m1",                        # ticks | m1 | open
-    [Nullable[double]]$Spread,                       # pips; with m1/open data the CLI default is 0 (too optimistic)
-    [Nullable[double]]$Commission,                   # per million; CLI default 0
+    [string]$DataMode = "ticks",                     # ticks (real spread from the tick data; the standard) | m1 | open
+    [Nullable[double]]$Spread,                       # pips; only for m1/open data, where the CLI default is 0 (too optimistic)
+    [Nullable[double]]$Commission,                   # USD per million per side; CLI default 0. Razor gold: 8 (= 3.50 USD per lot per side)
     [Nullable[double]]$MinStopPct, [Nullable[double]]$MaxStopPct,
     [int]$FlatTime = 0,                              # intraday only: close everything at this UTC time (HHmm, e.g. 2045); 0 = off
     [string]$Note = "",
     [string]$Step = "",                              # shown with the progress on the website, e.g. "3/10"
     [switch]$NoSend,                                 # research run: do not send the result to the lab
     [switch]$SaveLocal,                              # also write the report to Documents\BacktestLab\local\<code>-<symbol>-<tf>.json
-    [switch]$CliReport,
-    [switch]$Dump,                                   # SCALP_S3D only: write every prediction to Documents\BacktestLab\data\scalp-dump.csv (parity check)                              # keep ctrader-cli's own (very large) JSON report next to the log
+    [switch]$CliReport,                              # keep ctrader-cli's own (very large) JSON report next to the log
+    [switch]$Dump,                                   # SCALP_S3D only: write every prediction to Documents\BacktestLab\data\scalp-dump.csv (parity check)
+    [switch]$Record,                                 # test the live recorder inside a backtest: writes %LOCALAPPDATA%\BacktestLab\live-test (no market depth)
     [switch]$Build,
     [int]$TimeoutMinutes = 30
 )
@@ -170,11 +171,24 @@ $tick = {
 
 Write-Host ("Backtest {0} {1} {2}  {3} -> {4}" -f $Strategy, $Symbol, $Period, $Start, $End) -ForegroundColor Cyan
 Send-Progress "Starting" 0 "running" $null
+$runStarted = (Get-Date).AddSeconds(-5)
 $sw = [Diagnostics.Stopwatch]::StartNew()
 if ($Dump) { $env:BACKTESTLAB_DUMP = "1" }
+if ($Record) { $env:BACKTESTLAB_RECORD = "1" }
 $ok = Invoke-Cli ($a -join " ") $log ($TimeoutMinutes * 60) "] stopped." $tick
 $env:BACKTESTLAB_DUMP = $null
+$env:BACKTESTLAB_RECORD = $null
 Write-Host ("Finished in {0} s. Log: {1}" -f [int]$sw.Elapsed.TotalSeconds, $log)
+
+# ctrader-cli leaves its own report (report.html, 15-400 MB) for every run under Documents\cAlgo\Data\cBots\BacktestLab\<guid>\Backtesting.
+# Nothing here uses it (results go to the lab), and Documents is often inside OneDrive, so remove the folders this run created.
+$cliOut = Join-Path $docs "cAlgo\Data\cBots\BacktestLab"
+if (Test-Path $cliOut) {
+    Get-ChildItem $cliOut -Directory | Where-Object {
+        $_.Name -match '^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$' -and $_.CreationTime -ge $runStarted -and
+        (Test-Path (Join-Path $_.FullName "Backtesting")) -and @(Get-ChildItem $_.FullName).Count -eq 1
+    } | ForEach-Object { Remove-Item $_.FullName -Recurse -Force -Confirm:$false -ErrorAction SilentlyContinue }
+}
 
 $lines = @(Get-Content $log -ErrorAction SilentlyContinue) + @(Get-Content "$log.err" -ErrorAction SilentlyContinue)
 $sent = $lines | Where-Object { $_ -match 'Sent to lab: .*"runId":(\d+)' } | Select-Object -Last 1

@@ -177,22 +177,28 @@ function candleChart(t) {
   return svg;
 }
 
+const hasBars = (t) => Array.isArray(t.bars) && t.bars.length > 1;
+
+function tradeCaption(t) {
+  const minutes = Math.round((Date.parse(t.exitTime) - Date.parse(t.entryTime)) / 60000);
+  return h("figcaption", {},
+    h("b", {}, `${WEEKDAYS[tradeWeekday(t)]} ${dateTime(t.entryTime)}`), ` · ${t.side} · `,
+    h("span", { class: signClass(t.net) }, `${t.net > 0 ? "ชนะ" : "แพ้"} ${money(t.net)} (${num(t.pips)} pips)`),
+    h("span", { class: "muted" }, ` · ถือ ${minutes} นาที · #${t.id}`));
+}
+
 function examples(trades) {
-  const list = trades.filter((t) => Array.isArray(t.bars) && t.bars.length > 1);
+  // รอบทดสอบรุ่นใหม่แนบแท่งราคาของทุกเทรด และติดธง example ให้เทรดตัวอย่าง; รุ่นเก่าแนบเฉพาะเทรดตัวอย่าง
+  const flagged = trades.some((t) => t.example);
+  const list = trades.filter((t) => hasBars(t) && (!flagged || t.example));
   if (!list.length) return "";
   let wd = -1, outcome = "";
   const grid = h("div", { class: "examples" });
   const draw = () => {
     const shown = list.filter((t) => (wd < 0 || tradeWeekday(t) === wd) && (!outcome || (outcome === "win") === (t.net > 0)));
-    grid.replaceChildren(...(shown.length ? shown.map((t) => {
-      const minutes = Math.round((Date.parse(t.exitTime) - Date.parse(t.entryTime)) / 60000);
-      return h("figure", { class: "card example", style: "margin:0" },
-        h("figcaption", {},
-          h("b", {}, `${WEEKDAYS[tradeWeekday(t)]} ${dateTime(t.entryTime)}`), ` · ${t.side} · `,
-          h("span", { class: signClass(t.net) }, `${t.net > 0 ? "ชนะ" : "แพ้"} ${money(t.net)} (${num(t.pips)} pips)`),
-          h("span", { class: "muted" }, ` · ถือ ${minutes} นาที · #${t.id}`)),
-        candleChart(t));
-    }) : [h("p", { class: "empty" }, "ไม่มีตัวอย่างที่ตรงเงื่อนไข")]));
+    grid.replaceChildren(...(shown.length
+      ? shown.map((t) => h("figure", { class: "card example", style: "margin:0" }, tradeCaption(t), candleChart(t)))
+      : [h("p", { class: "empty" }, "ไม่มีตัวอย่างที่ตรงเงื่อนไข")]));
   };
   const tabs = h("div", { class: "tabs", role: "group", "aria-label": "เลือกวัน" });
   const tab = (label, i) => h("button", { "aria-pressed": String(wd === i), onclick: () => { wd = i; paint(); } }, label);
@@ -210,22 +216,56 @@ function examples(trades) {
 
 function tradesTable(trades) {
   const shown = trades.slice(-1000);
+  const offset = trades.length - shown.length;
+  const charted = shown.filter(hasBars).length;
+  const rows = [];
+  let selected = -1;
+
+  // กราฟของเทรดที่เลือก — อยู่เหนือตารางและเกาะขอบบนของจอ จะได้กดไล่ดูทีละแถวโดยไม่ต้องเลื่อนกลับขึ้นมา
+  const viewer = h("div", { class: "trade-view" });
+  const select = (i, scroll) => {
+    if (i < 0 || i >= shown.length || !hasBars(shown[i])) return;
+    rows[selected]?.classList.remove("selected");
+    selected = i;
+    rows[i].classList.add("selected");
+    const step = (dir) => { for (let j = i + dir; j >= 0 && j < shown.length; j += dir) if (hasBars(shown[j])) return j; return -1; };
+    const prev = step(-1), next = step(1);
+    viewer.replaceChildren(h("figure", { class: "card example", style: "margin:0" },
+      h("div", { class: "toolbar" },
+        h("button", { disabled: prev < 0 || null, onclick: () => select(prev, false) }, "← ไม้ก่อนหน้า"),
+        h("button", { disabled: next < 0 || null, onclick: () => select(next, false) }, "ไม้ถัดไป →"),
+        h("span", { class: "muted" }, `ไม้ที่ ${offset + i + 1} จาก ${trades.length}`)),
+      tradeCaption(shown[i]), candleChart(shown[i])));
+    rows[i].scrollIntoView({ block: "nearest" });
+    if (scroll) viewer.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
+
+  shown.forEach((t, i) => {
+    const can = hasBars(t);
+    rows.push(h("tr", can ? { class: "link", tabindex: "0", title: "กดเพื่อดูกราฟของไม้นี้",
+        onclick: () => select(i, true), onkeydown: (e) => { if (e.key === "Enter") select(i, true); } } : {},
+      h("td", { class: "num" }, offset + i + 1),
+      h("td", {}, t.side),
+      h("td", { class: "mono" }, dateTime(t.entryTime)),
+      h("td", { class: "mono" }, dateTime(t.exitTime)),
+      h("td", { class: "num" }, t.entryPrice),
+      h("td", { class: "num" }, t.exitPrice),
+      h("td", { class: `num ${signClass(t.pips)}` }, num(t.pips)),
+      h("td", { class: `num ${signClass(t.net)}` }, money(t.net)),
+    ));
+  });
+
+  const hint = charted === shown.length ? "กดแถวไหนก็ได้เพื่อดูกราฟแท่งเทียนของไม้นั้น: จุดเข้า จุดออก และ SL/TP"
+    : charted > 0 ? `กดแถวเพื่อดูกราฟของไม้นั้น — มีกราฟ ${charted} จาก ${shown.length} ไม้ (รอบทดสอบที่รันก่อน 04/10/2026 แนบแท่งราคาเฉพาะไม้ตัวอย่าง รันใหม่จะได้ครบ)`
+    : "รอบทดสอบนี้ไม่ได้แนบแท่งราคา จึงดูกราฟรายไม้ไม่ได้";
   return h("section", { class: "stack" },
     h("h2", {}, `รายการเทรด (${trades.length})`),
-    trades.length > shown.length && h("p", { class: "muted" }, `แสดง ${shown.length} รายการล่าสุด`),
+    h("p", { class: "muted" }, hint, trades.length > shown.length ? ` · แสดง ${shown.length} รายการล่าสุด` : ""),
+    viewer,
     h("div", { class: "table-wrap" }, h("table", {},
       h("thead", {}, h("tr", {}, ["#", "ฝั่ง", "เข้า", "ออก", "ราคาเข้า", "ราคาออก", "Pips", "Net"].map((t, i) =>
         h("th", { class: i >= 4 ? "num" : null }, t)))),
-      h("tbody", {}, shown.map((t, i) => h("tr", {},
-        h("td", { class: "num" }, trades.length - shown.length + i + 1),
-        h("td", {}, t.side),
-        h("td", { class: "mono" }, dateTime(t.entryTime)),
-        h("td", { class: "mono" }, dateTime(t.exitTime)),
-        h("td", { class: "num" }, t.entryPrice),
-        h("td", { class: "num" }, t.exitPrice),
-        h("td", { class: `num ${signClass(t.pips)}` }, num(t.pips)),
-        h("td", { class: `num ${signClass(t.net)}` }, money(t.net)),
-      ))),
+      h("tbody", {}, rows),
     )),
   );
 }

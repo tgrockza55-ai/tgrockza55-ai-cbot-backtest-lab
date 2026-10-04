@@ -62,23 +62,55 @@ namespace cAlgo.Robots
         [Parameter("Run note", DefaultValue = "", Group = "Report")]
         public string RunNote { get; set; }
 
+        // รันสดบนบัญชี Demo: บันทึกตลาด (tick, DOM, คำทำนาย, ข่าว, ราคาที่ได้จริง) ลง %LOCALAPPDATA%\BacktestLab\live — ดู LiveRecorder.cs
+        // ไม่มีผลตอน backtest
+        [Parameter("Record market", DefaultValue = true, Group = "Live")]
+        public bool RecordMarket { get; set; }
+
+        [Parameter("Place orders (off = record only)", DefaultValue = true, Group = "Live")]
+        public bool PlaceOrders { get; set; }
+
+        [Parameter("Book snapshot every (s)", DefaultValue = 2, MinValue = 1, Group = "Live")]
+        public int BookSeconds { get; set; }
+
         public const string Label = "BacktestLab";
+        // กราฟสดโหลดประวัติมาแค่ราวพันแท่ง — ทฤษฎีที่มีสถานะต่อเนื่อง (EMA, กรอบของวันก่อน, โมเดล) ต้องการมากกว่านั้น
+        private const int LiveHistoryBars = 6000;
 
         private StrategyBase _strategy;
         private EquityRecorder _equity;
+        private LiveRecorder _recorder;
         private DateTime _startTime;
         private double _startBalance;
         private bool _structureStops;
+        private bool _canTrade = true;
+        // ราคาที่เห็นตอนสั่งปิด ของแต่ละ position — ไว้เทียบกับราคาที่ได้จริง (ใช้เฉพาะตอนบันทึกตลาดสด)
+        private readonly Dictionary<int, double> _expectedClose = new Dictionary<int, double>();
         // ราคา SL / TP ตอนเปิดของแต่ละ position (History ไม่เก็บไว้ให้)
         private readonly Dictionary<int, double?[]> _stops = new Dictionary<int, double?[]>();
         private readonly Dictionary<int, TradePlan> _plans = new Dictionary<int, TradePlan>();
 
-        // เทรดตัวอย่างที่แนบแท่งราคาไปให้หน้าเว็บวาดกราฟ: ต่อวันในสัปดาห์ เอาชนะ/แพ้อย่างละเท่านี้
+        // แท่งราคาที่แนบไปกับเทรด ให้หน้าเว็บวาดกราฟ
+        //   เทรดตัวอย่าง (ต่อวันในสัปดาห์ เอาชนะ/แพ้อย่างละ ExamplesPerGroup) ได้กรอบกว้าง — แสดงในหัวข้อ "ตัวอย่างกราฟ"
+        //   เทรดที่เหลือได้กรอบแคบ — แสดงเมื่อกดแถวในรายการเทรด; จำนวนแท่งรวมจำกัดที่ MaxReportBars (เกินแล้วเทรดเก่าสุดไม่มีกราฟ)
         private const int ExamplesPerGroup = 2;
         private const int ExampleBarsBefore = 60, ExampleBarsAfter = 20, ExampleMaxBars = 300;
+        private const int TradeBarsBefore = 30, TradeBarsAfter = 12, MaxReportBars = 50000;
 
         protected override void OnStart()
         {
+            var live = RunningMode == RunningMode.RealTime;
+            if (live)
+            {
+                try
+                {
+                    for (int k = 0; k < 30 && Bars.Count < LiveHistoryBars; k++)
+                        if (Bars.LoadMoreHistory() <= 0) break;
+                }
+                catch (Exception e) { Print("Could not load more history: {0}", e.Message); }
+                Print("History loaded: {0} bars", Bars.Count);
+            }
+
             _strategy = StrategyBase.Create(StrategyCode);
             _strategy.Attach(this, new[] { P1, P2, P3, P4 });
             _equity = new EquityRecorder(MaxEquityPoints);
@@ -91,10 +123,41 @@ namespace cAlgo.Robots
             foreach (var rule in _strategy.EntryRules) Print("  Entry: {0}", _strategy.Describe(rule));
             foreach (var rule in _strategy.ExitRules) Print("  Exit:  {0}", _strategy.Describe(rule));
 
-            if (RunningMode == RunningMode.RealTime)
-                Print("WARNING: running live/demo — results are only sent in backtest mode.");
+            if (live)
+            {
+                // cBot นี้ไม่ส่งคำสั่งบนบัญชีเงินจริงเด็ดขาด — บันทึกตลาดได้อย่างเดียว
+                _canTrade = PlaceOrders && !Account.IsLive;
+                if (Account.IsLive) Print("LIVE (real money) account: this cBot never places orders here. Recording only.");
+                else if (!PlaceOrders) Print("Place orders is off: recording only.");
+                else Print("Demo account: orders are ON ({0} lot). Results are not sent to the lab in real time.", Lots);
+            }
             else if (RunningMode != RunningMode.Optimization && SendResults)
                 Reporter.RetryPending(this);
+
+            // BACKTESTLAB_RECORD=1: ทดสอบตัวบันทึกใน backtest (เขียนลงโฟลเดอร์ live-test; ไม่มี DOM)
+            var testRecorder = !live && RunningMode != RunningMode.Optimization && Environment.GetEnvironmentVariable("BACKTESTLAB_RECORD") == "1";
+            if ((live && RecordMarket) || testRecorder)
+            {
+                try
+                {
+                    MarketDepth depth = null;
+                    try { depth = MarketData.GetMarketDepth(SymbolName); } catch (Exception e) { Print("No market depth: {0}", e.Message); }
+                    _recorder = new LiveRecorder(this, depth, BookSeconds, testRecorder, _strategy.Code);
+                    Positions.Closed += OnPositionClosed;
+                    Timer.Start(1);
+                }
+                catch (Exception e) { _recorder = null; Print("Recorder could not start: {0}", e.Message); }
+            }
+        }
+
+        protected override void OnTick()
+        {
+            if (_recorder != null) _recorder.OnTick();
+        }
+
+        protected override void OnTimer()
+        {
+            if (_recorder != null) _recorder.OnTimer();
         }
 
         protected override void OnBar()
@@ -104,16 +167,17 @@ namespace cAlgo.Robots
             var flat = InFlatWindow(Server.Time);
             foreach (var pos in Positions.FindAll(Label, SymbolName))
             {
-                if (flat || _strategy.ShouldExit(pos)) ClosePosition(pos);
+                if (flat || _strategy.ShouldExit(pos)) Close(pos);
                 else Manage(pos);
             }
 
             var signal = _strategy.Signal();   // เรียกทุกแท่ง เพื่อให้สถานะของทฤษฎีเดินต่อเนื่อง
-            if (signal == null || flat) return;
+            if (_recorder != null) _recorder.OnBar(signal, _strategy.Prediction, Positions.FindAll(Label, SymbolName).Length);
+            if (signal == null || flat || !_canTrade) return;
 
             if (_strategy.ExitOnOppositeSignal)
                 foreach (var pos in Positions.FindAll(Label, SymbolName).Where(p => p.TradeType != signal.Value))
-                    ClosePosition(pos);
+                    Close(pos);
 
             // ถือพร้อมกันได้ตามที่ทฤษฎีกำหนด (ปกติ 1) แต่ไม่เกิน 3 ไม้ และ 3 ไม้ต้องไม่ไปทางเดียวกันทั้งหมด
             var open = Positions.FindAll(Label, SymbolName);
@@ -134,7 +198,17 @@ namespace cAlgo.Robots
                 tp = _strategy.RewardRisk > 0 ? Math.Round(sl.Value * _strategy.RewardRisk, 1) : (double?)null;   // RewardRisk <= 0 = ไม่มี TP
                 _structureStops = true;
             }
+            var expected = signal.Value == TradeType.Buy ? Symbol.Ask : Symbol.Bid;
+            var clock = System.Diagnostics.Stopwatch.StartNew();
             var result = ExecuteMarketOrder(signal.Value, SymbolName, volume, Label, sl, tp, _strategy.SignalTag);
+            clock.Stop();
+            if (_recorder != null)
+            {
+                if (result.IsSuccessful && result.Position != null)
+                    _recorder.OrderOpened(result.Position, expected, clock.Elapsed.TotalMilliseconds, _strategy.Prediction);
+                else
+                    _recorder.OrderFailed(signal.Value, result.Error.HasValue ? result.Error.Value.ToString() : "unknown");
+            }
             if (result.IsSuccessful && result.Position != null)
             {
                 var p = result.Position;
@@ -148,6 +222,28 @@ namespace cAlgo.Robots
                         CutBelowR = _strategy.CutBelowR,
                     };
             }
+        }
+
+        /// <summary>ปิดออเดอร์ และจำราคาที่เห็นตอนสั่งไว้เทียบกับราคาที่ได้จริง (เฉพาะตอนบันทึกตลาดสด)</summary>
+        private void Close(Position pos)
+        {
+            if (_recorder != null) _expectedClose[pos.Id] = pos.TradeType == TradeType.Buy ? Symbol.Bid : Symbol.Ask;
+            ClosePosition(pos);
+        }
+
+        private void OnPositionClosed(PositionClosedEventArgs args)
+        {
+            var p = args.Position;
+            if (_recorder == null || p.Label != Label || p.SymbolName != SymbolName) return;
+
+            double? expected = null; double seen;
+            if (args.Reason == PositionCloseReason.StopLoss) expected = p.StopLoss;
+            else if (args.Reason == PositionCloseReason.TakeProfit) expected = p.TakeProfit;
+            else if (_expectedClose.TryGetValue(p.Id, out seen)) expected = seen;
+            _expectedClose.Remove(p.Id);
+
+            var deal = History.LastOrDefault(t => t.PositionId == p.Id);
+            _recorder.OrderClosed(p, args.Reason.ToString(), expected, deal != null ? deal.ClosingPrice : (double?)null);
         }
 
         private class TradePlan
@@ -167,7 +263,7 @@ namespace cAlgo.Robots
             if (plan.CutAfterMinutes > 0 && !plan.CutChecked && (Server.Time - pos.EntryTime).TotalMinutes >= plan.CutAfterMinutes)
             {
                 plan.CutChecked = true;
-                if (profitR < plan.CutBelowR) { ClosePosition(pos); return true; }
+                if (profitR < plan.CutBelowR) { Close(pos); return true; }
             }
             if (plan.BreakevenAtR > 0 && !plan.AtBreakeven && profitR >= plan.BreakevenAtR)
             {
@@ -190,6 +286,7 @@ namespace cAlgo.Robots
             if (_equity == null) return;
             _equity.Add(Server.Time, Account.Equity, force: true);
             _strategy.OnStop();
+            if (_recorder != null) _recorder.Stop();
 
             if (RunningMode == RunningMode.RealTime || _strategy.IsUtility || (!SendResults && !SaveLocal)) return;
 
@@ -265,6 +362,20 @@ namespace cAlgo.Robots
         private List<Dictionary<string, object>> TradeRows(List<HistoricalTrade> trades)
         {
             var examples = PickExamples(trades);
+            var bars = new Dictionary<int, List<double[]>>();
+            int used = 0;
+            foreach (var t in trades.Where(t => examples.Contains(t.PositionId)))
+            {
+                var b = TradeBars(t, ExampleBarsBefore, ExampleBarsAfter);
+                if (b != null) { bars[t.PositionId] = b; used += b.Count; }
+            }
+            for (int k = trades.Count - 1; k >= 0 && used < MaxReportBars; k--)      // ใหม่สุดก่อน
+            {
+                if (bars.ContainsKey(trades[k].PositionId)) continue;
+                var b = TradeBars(trades[k], TradeBarsBefore, TradeBarsAfter);
+                if (b != null) { bars[trades[k].PositionId] = b; used += b.Count; }
+            }
+
             var rows = new List<Dictionary<string, object>>(trades.Count);
             foreach (var t in trades)
             {
@@ -290,10 +401,11 @@ namespace cAlgo.Robots
                     if (stops[0].HasValue) row["sl"] = stops[0].Value;
                     if (stops[1].HasValue) row["tp"] = stops[1].Value;
                 }
-                if (examples.Contains(t.PositionId))
+                List<double[]> tradeBars;
+                if (bars.TryGetValue(t.PositionId, out tradeBars))
                 {
-                    var bars = ExampleBars(t);
-                    if (bars != null) row["bars"] = bars;   // [[unixSeconds, open, high, low, close], ...]
+                    row["bars"] = tradeBars;                // [[unixSeconds, open, high, low, close], ...]
+                    if (examples.Contains(t.PositionId)) row["example"] = true;
                 }
                 rows.Add(row);
             }
@@ -314,14 +426,14 @@ namespace cAlgo.Robots
             return picked;
         }
 
-        private List<double[]> ExampleBars(HistoricalTrade t)
+        private List<double[]> TradeBars(HistoricalTrade t, int before, int after)
         {
             var entry = Bars.OpenTimes.GetIndexByTime(t.EntryTime);
             var exit = Bars.OpenTimes.GetIndexByTime(t.ClosingTime);
             if (entry < 0 || exit < 0) return null;
 
-            var from = Math.Max(0, entry - ExampleBarsBefore);
-            var to = Math.Min(Bars.Count - 1, Math.Min(exit + ExampleBarsAfter, from + ExampleMaxBars - 1));
+            var from = Math.Max(0, entry - before);
+            var to = Math.Min(Bars.Count - 1, Math.Min(exit + after, from + ExampleMaxBars - 1));
             var rows = new List<double[]>(to - from + 1);
             for (int i = from; i <= to; i++)
             {

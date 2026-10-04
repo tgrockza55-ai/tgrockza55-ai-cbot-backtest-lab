@@ -80,6 +80,9 @@ namespace cAlgo.Robots
         /// <summary>ป้ายของสัญญาณล่าสุด — robot ใส่เป็น Comment ของ position (ทฤษฎีรวมใช้แยกว่าออเดอร์มาจากทฤษฎีย่อยไหน)</summary>
         public virtual string SignalTag => null;
 
+        /// <summary>ทฤษฎีที่ใช้โมเดล: P(ราคาขึ้น) ของแท่งล่าสุดที่ปิดแล้ว หลังเรียก Signal() — ตัวบันทึกตลาดสดเก็บไว้เทียบกับผลจริง</summary>
+        public virtual double? Prediction => null;
+
         /// <summary>true = เครื่องมือ (เช่นส่งออกข้อมูล) ไม่ใช่ทฤษฎี — ไม่ส่งผลขึ้น lab</summary>
         public virtual bool IsUtility => false;
 

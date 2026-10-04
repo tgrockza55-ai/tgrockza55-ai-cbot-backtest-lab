@@ -41,7 +41,7 @@ namespace cAlgo.Robots
 
         private const int Warmup = 1500;
         private class Model { public long From; public double[] Mean, Std, W; public double B; }
-        private readonly List<Model> _models = new List<Model>();
+        private List<Model> _models = new List<Model>();
         private long[] _events = new long[0];
         private StreamWriter _dump;
 
@@ -52,16 +52,17 @@ namespace cAlgo.Robots
         private long _sessionDay = -1, _calendarDay = -1;
         private double _dayHigh, _dayLow, _pv, _vv, _prevDayHigh = double.NaN, _prevDayLow = double.NaN, _dayOpen;
         private double _p = double.NaN;                                          // P(ขึ้น) ของแท่งล่าสุดที่ปิดแล้ว
+        private DateTime _loaded;                                                // วันที่อ่านไฟล์โมเดล/ข่าวล่าสุด
+
+        public override double? Prediction => double.IsNaN(_p) ? (double?)null : _p;
 
         private static long Unix(DateTime t) => new DateTimeOffset(DateTime.SpecifyKind(t, DateTimeKind.Utc)).ToUnixTimeSeconds();
 
         protected override void OnInit()
         {
             Defaults(0.56, 5, 5, 1);
-            var modelFile = Path.Combine(Reporter.Folder, "model", Bot.SymbolName + "-5m.json");
-            var eventFile = Path.Combine(Reporter.Folder, "data", "news", "events.csv");
-            if (File.Exists(modelFile)) LoadModels(modelFile); else Bot.Print("SCALP_S3D: missing {0} (run Phase1.exe export) — no trades", modelFile);
-            if (File.Exists(eventFile)) LoadEvents(eventFile); else { Bot.Print("SCALP_S3D: missing {0} (run tools\\news-fetch.ps1) — no trades", eventFile); _models.Clear(); }
+            LoadFiles();
+            _loaded = Bot.Server.Time.Date;
             if (Environment.GetEnvironmentVariable("BACKTESTLAB_DUMP") == "1")
             {
                 _dump = new StreamWriter(Path.Combine(Reporter.Folder, "data", "scalp-dump.csv"), false);
@@ -70,15 +71,31 @@ namespace cAlgo.Robots
             for (int i = 0; i <= Bot.Bars.Count - 2; i++) Process(i);
         }
 
+        /// <summary>อ่านไฟล์โมเดลและข่าว — ขาดไฟล์ใดไฟล์หนึ่ง = ไม่เทรด</summary>
+        private void LoadFiles()
+        {
+            var modelFile = Path.Combine(Reporter.Folder, "model", Bot.SymbolName + "-5m.json");
+            var eventFile = Path.Combine(Reporter.Folder, "data", "news", "events.csv");
+            if (!File.Exists(modelFile)) { Bot.Print("SCALP_S3D: missing {0} (run Phase1.exe export) — no trades", modelFile); _models = new List<Model>(); return; }
+            if (!File.Exists(eventFile)) { Bot.Print("SCALP_S3D: missing {0} (run tools\\news-fetch.ps1) — no trades", eventFile); _models = new List<Model>(); return; }
+            LoadEvents(eventFile);
+            LoadModels(modelFile);
+            if (Bot.RunningMode == RunningMode.RealTime && _models.Count > 0)
+                Bot.Print("SCALP_S3D: {0} monthly models (newest from {1:yyyy-MM-dd}), {2} high-impact news times", _models.Count,
+                    DateTimeOffset.FromUnixTimeSeconds(_models[_models.Count - 1].From).UtcDateTime, _events.Length);
+        }
+
         private void LoadModels(string file)
         {
+            var list = new List<Model>();
             using (var doc = JsonDocument.Parse(File.ReadAllText(file)))
                 foreach (var m in doc.RootElement.GetProperty("models").EnumerateArray())
                 {
                     double[] Arr(string name) => m.GetProperty(name).EnumerateArray().Select(v => v.GetDouble()).ToArray();
-                    _models.Add(new Model { From = m.GetProperty("from").GetInt64(), Mean = Arr("mean"), Std = Arr("std"), W = Arr("w"), B = m.GetProperty("b").GetDouble() });
+                    list.Add(new Model { From = m.GetProperty("from").GetInt64(), Mean = Arr("mean"), Std = Arr("std"), W = Arr("w"), B = m.GetProperty("b").GetDouble() });
                 }
-            _models.Sort((a, b) => a.From.CompareTo(b.From));
+            list.Sort((a, b) => a.From.CompareTo(b.From));
+            _models = list;
         }
 
         private void LoadEvents(string file)
@@ -98,6 +115,13 @@ namespace cAlgo.Robots
 
         public override TradeType? Signal()
         {
+            // รันสดต่อเนื่องหลายวัน: อ่านไฟล์ใหม่วันละครั้ง (ข่าวถูกสร้างใหม่รายสัปดาห์ โมเดลรายเดือน) — อ่านไม่ได้ก็ใช้ชุดเดิมต่อ
+            if (Bot.RunningMode == RunningMode.RealTime && Bot.Server.Time.Date != _loaded)
+            {
+                _loaded = Bot.Server.Time.Date;
+                try { LoadFiles(); } catch (Exception e) { Bot.Print("SCALP_S3D: reload failed, keeping the previous files: {0}", e.Message); }
+            }
+
             int i = Bot.Bars.Count - 2;
             for (int j = _last + 1; j <= i; j++) Process(j);
             if (double.IsNaN(_p)) return null;

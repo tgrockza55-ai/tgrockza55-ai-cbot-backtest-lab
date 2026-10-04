@@ -31,6 +31,7 @@ static partial class Phase1
     static readonly int[] Horizons = { 1, 3, 5, 15, 60 };
     static readonly double[] Edges = { 0.52, 0.54, 0.56, 0.58, 0.60, 0.65 };   // confidence buckets: [0.5,0.52) ... [0.65,1]
     const int TrainMonths = 12;
+    static int SeedOffset;
     const int Warmup = 1500;
 
     static long[] T; static double[] O, H, L, C, V;
@@ -109,11 +110,14 @@ static partial class Phase1
     static int Main(string[] args)
     {
         var docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        if (args.Length > 0 && (args[0] == "live" || args[0] == "live-test"))                // study of the market recorded live on Demo (Live.cs)
+            return LiveStudy(args.Length > 1 ? args[1] : "XAUUSD", args[0] == "live-test");
         var study = args.FirstOrDefault(a => a.StartsWith("study:"))?.Substring(6);          // tier-0 event studies (Studies.cs)
-        var period = args.FirstOrDefault(a => a.StartsWith("period:"))?.Substring(7) ?? "explore";
+        var period = args.FirstOrDefault(a => a.StartsWith("period:"))?.Substring(7) ?? "all";
         var export = args.Contains("export");                                                // write the monthly models for the cBot
         var predict = args.Contains("predict");                                              // save walk-forward predictions for the scalp studies
-        args = args.Where(a => !a.StartsWith("study:") && !a.StartsWith("period:") && a != "predict" && a != "export").ToArray();
+        SeedOffset = int.Parse(args.FirstOrDefault(a => a.StartsWith("seed:"))?.Substring(5) ?? "0", Inv);   // another shuffle of the training data: how much does a result depend on it?
+        args = args.Where(a => !a.StartsWith("study:") && !a.StartsWith("period:") && !a.StartsWith("seed:") && a != "predict" && a != "export").ToArray();
         var symbol = args.Length > 1 ? args[1] : "XAUUSD";
         var csv = args.Length > 0 && args[0] != "-" ? args[0] : Path.Combine(docs, "BacktestLab", "data", symbol + "_Minute.csv");
         FixedCost = args.Length > 2 ? double.Parse(args[2], Inv) : 0.22;
@@ -417,7 +421,9 @@ static partial class Phase1
 
             // mini-batch SGD with momentum, L2
             var w = new double[k]; var vel = new double[k]; double bias = 0, vb = 0;
-            var rnd = new Random(1234 + m); var order = train.ToArray();
+            // seeded by calendar month (not by the position of the month in the file), so a model does not change when older data is removed
+            var cal = DateTimeOffset.FromUnixTimeSeconds(testFrom).UtcDateTime;
+            var rnd = new Random(1234 + (cal.Year - 2020) * 12 + cal.Month - 1 + 1000 * SeedOffset); var order = train.ToArray();
             const int Batch = 2048; const double L2 = 1e-4, Mom = 0.9;
             var grad = new double[k]; var x = new double[k];
             for (int epoch = 0; epoch < 4; epoch++)

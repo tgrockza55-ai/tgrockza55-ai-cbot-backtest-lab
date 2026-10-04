@@ -1,12 +1,15 @@
 // Tier 0 of the research loop: event studies straight from the M1 bars — seconds per run, no model, no cTrader.
 // A hypothesis here is "condition known at time T -> what the price did over the next window".
 //
-// Run: Phase1.exe study:<h1|h2|h4|h5|all> [period:<explore|validate|holdout|all>]
+// Run: Phase1.exe study:<h1|h2|h4|h5|all> [period:<all|y2024|hv-explore|hv-validate|hv-holdout>]
 //
-// Data discipline (default period = explore):
-//   explore   2020-01 .. 2024-12   free trial and error
-//   validate  2025-01 .. 2026-02   check a theory that has already been fixed
-//   holdout   2026-03 ..           only for a release candidate; every look is written in research\JOURNAL.md
+// Test range (user decision 04/10/2026): 2024-01 .. today. 2023 stays in the CSV only to train the model for the first
+// test months; 2020-2022 were removed. Every look at a period is written in research\JOURNAL.md.
+//   all          2024-01 ..           the whole test range (default)
+//   y2024        2024-01 .. 2024-12   quieter market, before the high-volatility regime
+//   hv-explore   2025-01 .. 2026-02   free trial and error for the scalp rules
+//   hv-validate  2026-03 .. 2026-06   check a rule that has already been fixed
+//   hv-holdout   2026-07 ..           only for a release candidate
 
 using System;
 using System.Collections.Generic;
@@ -21,15 +24,16 @@ static partial class Phase1
         long U(int y, int m) => new DateTimeOffset(y, m, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
         switch (name)
         {
-            case "explore": PFrom = U(2020, 1); PTo = U(2025, 1); break;
-            case "validate": PFrom = U(2025, 1); PTo = U(2026, 3); break;
-            case "holdout": PFrom = U(2026, 3); PTo = long.MaxValue; break;
-            case "all": PFrom = 0; PTo = long.MaxValue; break;
-            // scalp research uses only the high-volatility regime (user decision 04/10/2026)
+            case "all": PFrom = U(2024, 1); PTo = long.MaxValue; break;
+            case "y2024": PFrom = U(2024, 1); PTo = U(2025, 1); break;
+            // develop a rule on dev, then check it once on test (user decision 04/10/2026)
+            case "dev": PFrom = U(2023, 1); PTo = U(2026, 4); break;
+            case "test": PFrom = U(2026, 4); PTo = long.MaxValue; break;
+            // scalp rules are searched only in the high-volatility regime (user decision 04/10/2026)
             case "hv-explore": PFrom = U(2025, 1); PTo = U(2026, 3); break;
             case "hv-validate": PFrom = U(2026, 3); PTo = U(2026, 7); break;
             case "hv-holdout": PFrom = U(2026, 7); PTo = long.MaxValue; break;
-            default: throw new ArgumentException("period: explore | validate | holdout | all | hv-explore | hv-validate | hv-holdout");
+            default: throw new ArgumentException("period: all | y2024 | dev | test | hv-explore | hv-validate | hv-holdout");
         }
         Console.WriteLine($"period: {name}  ({Date(Math.Max(PFrom, T[0]))} .. {Date(Math.Min(PTo - 1, T[T.Length - 1]))})   cost per round trip: {FixedCost}");
     }
@@ -78,7 +82,7 @@ static partial class Phase1
     // Phase1.exe predict  -> %LOCALAPPDATA%\BacktestLab\cache\pred-<symbol>.bin   (outside OneDrive; safe to delete, takes ~2 minutes to rebuild)
 
     static readonly int[] ScalpHorizons = { 1, 3, 5, 15 };
-    static string CachePath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BacktestLab", "cache", "pred-" + SymbolName + ".bin");
+    static string CachePath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BacktestLab", "cache", "pred-" + SymbolName + (SeedOffset != 0 ? "-s" + SeedOffset : "") + ".bin");
 
     static void SavePredictions()
     {
