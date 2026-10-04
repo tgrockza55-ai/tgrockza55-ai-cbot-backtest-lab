@@ -22,6 +22,7 @@ namespace cAlgo.Robots
     public class ScalpPullback : StrategyBase
     {
         public override string Code => "SCALP_S3D";
+        public override int Version => 2;                                        // v2: ถือครบ HoldMinutes แท่งพอดี บนข้อมูล tick / ตลาดสดด้วย (v1 มักถือเกินหนึ่งแท่ง)
         public override string Name => "Scalp: ย่อแล้วตามทิศของวัน";
         public override string Theory =>
             "Scalp ด้วยโมเดลทำนาย 5 นาที (logistic regression ฝึกใหม่ทุกเดือนจาก 12 เดือนก่อนหน้า): โมเดลเก่งเรื่องจับจังหวะที่ราคายืดไปแล้วจะถูกดึงกลับ จึงใช้เฉพาะเมื่อทิศที่โมเดลทายตรงกับทิศของวัน (ราคาเทียบราคาเปิดวัน) คือรอราคาย่อแล้วเข้าตามทิศของวัน และเทรดเฉพาะช่วงลอนดอนซึ่งเป็นช่วงที่ราคาถูกดึงกลับมากที่สุด";
@@ -135,7 +136,9 @@ namespace cAlgo.Robots
             return up ? TradeType.Buy : TradeType.Sell;
         }
 
-        public override bool ShouldExit(Position position) => (Bot.Server.Time - position.EntryTime).TotalMinutes >= P[1];
+        // เผื่อครึ่งนาที: บนข้อมูล tick และตลาดสด ออเดอร์ถูกเติมหลังนาทีเต็มเล็กน้อย และแท่งใหม่ก็เริ่มที่ tick แรกของนาที
+        // ถ้าเทียบกับ HoldMinutes ตรงๆ แท่งที่ครบกำหนดจะขาดไปไม่กี่ร้อยมิลลิวินาที แล้วถือเกินไปอีกหนึ่งแท่ง (v1 เป็นแบบนั้น)
+        public override bool ShouldExit(Position position) => (Bot.Server.Time - position.EntryTime).TotalMinutes >= P[1] - 0.5;
 
         public override void OnStop()
         {

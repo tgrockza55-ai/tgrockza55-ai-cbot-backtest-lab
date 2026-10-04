@@ -103,7 +103,8 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
   - โมเดลอยู่นอก repo: `Phase1.exe export` → `Documents\BacktestLab\model\XAUUSD-5m.json` (สร้างใหม่ทุกเดือนหลังอัปเดตไฟล์แท่ง M1; ต้องมี `data\news\events.csv` ด้วย)
     seed ของการฝึกผูกกับเดือนปฏิทิน โมเดลจึงไม่เปลี่ยนเมื่อไฟล์ข้อมูลเริ่มที่จุดอื่น
   - feature 35 ตัวมีสองที่ (`research\Phase1\Program.cs` และ `ScalpPullback.cs`) ต้องเหมือนกันทุกประการ — แก้แล้วตรวจด้วย `-Dump -NoSend` + `Phase1.exe study:parity`
-  - cTrader โหมดข้อมูล M1 เติม SL ที่ปลายแท่ง (แย่เกินจริง) ส่วนการจำลองชั้น 0 เติมที่ SL พอดี (ใกล้ผล tick) → กฎที่มี SL ต้องยืนยันด้วย tick
+  - การจำลองชั้น 0 ดีเกินจริงราว 0.1–0.3 USD ต่อไม้ในช่วงผันผวนสูง (ราคาเข้าจริงแย่กว่าราคาเปิดแท่ง, SL ถูกแตะด้วย bid, SL หลุดราคาได้) และ cTrader โหมด M1
+    เติม SL ที่ปลายแท่ง (แย่เกินจริง) → ชั้น 0 ใช้คัดกรองเท่านั้น ตัวตัดสินคือ tick · `SCALP_S3D` v2 (04/10/2026) ถือครบ 5 แท่งพอดีบน tick/ตลาดสด (v1 มักถือ 6)
 - กฎ R1 = `CH_SESSION_MOM` (โมเมนตัมข้าม session, เข้า 07:00 และ 10:00 UTC, ปิด 20:45 UTC) กำไรครบ 3 ช่วงเดิม (run #49–#51)
   แต่ drawdown สูง (27–64% ของบัญชี 1,000) ใช้กับทุน 100 ไม่ได้ — หน้า `summary.html` แสดงกฎนี้
 
