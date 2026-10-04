@@ -1,0 +1,16 @@
+# ความลับและไฟล์ในเครื่อง
+config.json
+*.env
+.env*
+pending/
+
+# cTrader / .NET build output
+bin/
+obj/
+*.algo
+.vs/
+*.user
+
+# Supabase CLI
+supabase/.temp/
+supabase/.branches/
