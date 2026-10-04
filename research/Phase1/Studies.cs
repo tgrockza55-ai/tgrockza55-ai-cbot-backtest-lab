@@ -61,7 +61,149 @@ static partial class Phase1
         if (name == "h5" || name == "all") HourStudy();
         if (name == "h6") MomentumDose();
         if (name == "h7") AnchorDrive();
+        if (name == "h8") SessionBehaviour();
         return 0;
+    }
+
+    // ------------------------------------------------------------------ H8: how does each session behave, and which kind of rule fits it?
+
+    static readonly (string name, int start, int end)[] Sessions =
+    {
+        ("Asia      00:00-07:00", 0, 420),
+        ("London    07:00-13:00", 420, 780),
+        ("NY early  13:00-17:00", 780, 1020),
+        ("NY late   17:00-20:45", 1020, 1245),
+    };
+
+    static void SessionBehaviour()
+    {
+        var days = Days(); int ns = Sessions.Length;
+        // behaviour
+        var range = new St[ns]; var absNet = new St[ns]; var eff = new St[ns]; var netOverRange = new St[ns]; var vol = new St[ns];
+        var sum1 = new double[ns]; var n1 = new long[ns];
+        int[] ks = { 5, 15, 30 }; var sumK = new double[ns, 3]; var nK = new long[ns, 3]; var acNum = new double[ns]; var acDen = new double[ns];
+        var highIn = new int[ns]; var lowIn = new int[ns]; int dayCount = 0;
+        // rules: 0 opening-range breakout, 1 mid-session extension (>=0.75), 2 same (>=1.5), 3 carry-over from earlier in the day, 4 break of the previous session's range
+        string[] rules = { "A opening-range breakout (first 60 min) -> session end",
+                           "B at mid-session, already moved >= 0.75x usual: keep going?",
+                           "B at mid-session, already moved >= 1.5x usual: keep going?",
+                           "C day already moved >= 0.75x usual before this session: keep going?",
+                           "D first close beyond the previous session's high/low -> session end",
+                           "A+ opening-range breakout in the SAME direction as the day so far",
+                           "A- opening-range breakout AGAINST the direction of the day so far",
+                           "D+ break of the previous session's range in the SAME direction as the day so far",
+                           "D- break of the previous session's range AGAINST the direction of the day so far" };
+        var res = new (St st, SortedDictionary<int, St> years)[ns, rules.Length];
+        for (int s = 0; s < ns; s++) { range[s] = new St(); absNet[s] = new St(); eff[s] = new St(); netOverRange[s] = new St(); vol[s] = new St(); for (int r = 0; r < rules.Length; r++) res[s, r] = (new St(), new SortedDictionary<int, St>()); }
+        void Rec(int s, int r, Day d, double usd) { res[s, r].st.Add(usd); if (!res[s, r].years.TryGetValue(d.Year, out var y)) res[s, r].years[d.Year] = y = new St(); y.Add(usd); }
+        var midHist = Enumerable.Range(0, ns).Select(_ => new Queue<double>()).ToArray();
+        var carryHist = Enumerable.Range(0, ns).Select(_ => new Queue<double>()).ToArray();
+        double prevDayHi = double.NaN, prevDayLo = double.NaN;
+
+        foreach (var d in days)
+        {
+            bool use = InPeriod(d.T0);
+            var hi = new double[ns]; var lo = new double[ns]; var ok = new bool[ns]; var first = new int[ns]; var last = new int[ns];
+            double dayHi = double.MinValue, dayLo = double.MaxValue; int hiS = -1, loS = -1;
+            for (int s = 0; s < ns; s++)
+            {
+                int i0 = LowerBound(d.T0 + Sessions[s].start * 60L), i1 = LowerBound(d.T0 + Sessions[s].end * 60L);
+                first[s] = i0; last[s] = i1;
+                ok[s] = i1 - i0 >= 0.9 * (Sessions[s].end - Sessions[s].start) && i0 < T.Length && T[i0] - (d.T0 + Sessions[s].start * 60L) < 600;
+                if (!ok[s]) continue;
+                hi[s] = double.MinValue; lo[s] = double.MaxValue;
+                for (int i = i0; i < i1; i++) { if (H[i] > hi[s]) hi[s] = H[i]; if (L[i] < lo[s]) lo[s] = L[i]; }
+                if (hi[s] > dayHi) { dayHi = hi[s]; hiS = s; }
+                if (lo[s] < dayLo) { dayLo = lo[s]; loS = s; }
+            }
+            if (use && ok.All(v => v)) { dayCount++; highIn[hiS]++; lowIn[loS]++; }
+
+            for (int s = 0; s < ns; s++)
+            {
+                if (!ok[s]) continue;
+                int i0 = first[s], i1 = last[s];
+                double open = O[i0], close = C[i1 - 1], net = close - open;
+
+                // ---- rule B needs the trailing size of the mid-session move; rule C the trailing size of the move before the session
+                int im = i0 + (i1 - i0) / 2; double dev = C[im] - open;
+                double sigmaB = midHist[s].Count >= 20 ? Math.Sqrt(midHist[s].Average(v => v * v)) : 0;
+                double prior = s == 0 ? d.PrevRet : open - d.P00;
+                double sigmaC = carryHist[s].Count >= 20 ? Math.Sqrt(carryHist[s].Average(v => v * v)) : 0;
+
+                if (use)
+                {
+                    double path = 0; for (int i = i0 + 1; i < i1; i++) path += Math.Abs(C[i] - C[i - 1]);
+                    range[s].Add(hi[s] - lo[s]); absNet[s].Add(Math.Abs(net)); vol[s].Add(Enumerable.Range(i0, i1 - i0).Sum(i => V[i]));
+                    if (path > 0) eff[s].Add(Math.Abs(net) / path);
+                    if (hi[s] > lo[s]) netOverRange[s].Add(Math.Abs(net) / (hi[s] - lo[s]));
+                    for (int i = i0 + 1; i < i1; i++) { double r = C[i] - C[i - 1]; sum1[s] += r * r; n1[s]++; }
+                    for (int q = 0; q < ks.Length; q++)
+                    {
+                        double prevR = double.NaN;
+                        for (int i = i0 + ks[q]; i < i1; i += ks[q])
+                        {
+                            double r = C[i] - C[i - ks[q]]; sumK[s, q] += r * r; nK[s, q]++;
+                            if (ks[q] == 15) { if (!double.IsNaN(prevR)) { acNum[s] += r * prevR; acDen[s] += prevR * prevR; } prevR = r; }
+                        }
+                    }
+
+                    // A: opening-range breakout
+                    double orHi = double.MinValue, orLo = double.MaxValue;
+                    for (int i = i0; i < i0 + 60; i++) { orHi = Math.Max(orHi, H[i]); orLo = Math.Min(orLo, L[i]); }
+                    for (int i = i0 + 60; i < i1 - 1; i++)
+                    {
+                        int dirA = C[i] > orHi ? 1 : C[i] < orLo ? -1 : 0;
+                        if (dirA == 0) continue;
+                        Rec(s, 0, d, dirA * (close - C[i]));
+                        if (!double.IsNaN(prior) && prior != 0) Rec(s, dirA == Math.Sign(prior) ? 5 : 6, d, dirA * (close - C[i]));
+                        break;
+                    }
+                    // B: extension at mid-session, result of continuing in the same direction
+                    if (sigmaB > 0 && dev != 0)
+                    {
+                        double follow = Math.Sign(dev) * (close - C[im]);
+                        if (Math.Abs(dev) >= 0.75 * sigmaB) Rec(s, 1, d, follow);
+                        if (Math.Abs(dev) >= 1.5 * sigmaB) Rec(s, 2, d, follow);
+                    }
+                    // C: carry-over
+                    if (sigmaC > 0 && !double.IsNaN(prior) && Math.Abs(prior) >= 0.75 * sigmaC) Rec(s, 3, d, Math.Sign(prior) * net);
+                    // D: break of the previous session's range (for Asia: the previous day's range)
+                    double pHi = s == 0 ? prevDayHi : (ok[s - 1] ? hi[s - 1] : double.NaN), pLo = s == 0 ? prevDayLo : (ok[s - 1] ? lo[s - 1] : double.NaN);
+                    if (!double.IsNaN(pHi))
+                        for (int i = i0; i < i1 - 1; i++)
+                        {
+                            int dirD = C[i] > pHi ? 1 : C[i] < pLo ? -1 : 0;
+                            if (dirD == 0) continue;
+                            Rec(s, 4, d, dirD * (close - C[i]));
+                            if (!double.IsNaN(prior) && prior != 0) Rec(s, dirD == Math.Sign(prior) ? 7 : 8, d, dirD * (close - C[i]));
+                            break;
+                        }
+                }
+                midHist[s].Enqueue(dev); if (midHist[s].Count > 60) midHist[s].Dequeue();
+                if (!double.IsNaN(prior)) { carryHist[s].Enqueue(prior); if (carryHist[s].Count > 60) carryHist[s].Dequeue(); }
+            }
+            if (ok.All(v => v)) { prevDayHi = dayHi; prevDayLo = dayLo; } else { prevDayHi = prevDayLo = double.NaN; }
+        }
+
+        Console.WriteLine("\n==== H8 session behaviour (UTC; Thai time = +7) ====");
+        Console.WriteLine("session                 range USD  |net| USD  cost/|net|  |net|/range  efficiency   VR5   VR15  VR30  autocorr15  day high here  day low here  tick volume");
+        for (int s = 0; s < ns; s++)
+        {
+            double v1 = sum1[s] / Math.Max(1, n1[s]);
+            string VR(int q) => (sumK[s, q] / Math.Max(1, nK[s, q]) / (ks[q] * v1)).ToString("0.00", Inv);
+            Console.WriteLine($"{Sessions[s].name}  {range[s].Mean,9:N2}  {absNet[s].Mean,9:N2}  {100 * FixedCost / absNet[s].Mean,9:N0}%  {netOverRange[s].Mean,11:N2}  {eff[s].Mean,10:N3}  {VR(0),5} {VR(1),5} {VR(2),5}  {acNum[s] / Math.Max(1e-12, acDen[s]),10:N3}  {100.0 * highIn[s] / Math.Max(1, dayCount),12:N1}%  {100.0 * lowIn[s] / Math.Max(1, dayCount),11:N1}%  {vol[s].Mean,11:N0}");
+        }
+        Console.WriteLine("VR (variance ratio): below 1 = moves tend to be undone (mean reverting), above 1 = moves tend to extend (trending). autocorr15 = correlation of consecutive 15-minute moves.");
+        Console.WriteLine("\nrule results: mean = USD per oz from going WITH the move, before cost. Negative = the opposite trade (fade) is the one that pays.");
+        for (int r = 0; r < rules.Length; r++)
+        {
+            Console.WriteLine($"\n{rules[r]}");
+            for (int s = 0; s < ns; s++)
+            {
+                var x = res[s, r]; if (x.st.N == 0) continue;
+                Console.WriteLine($"  {Sessions[s].name}  n {x.st.N,5}  win {x.st.Win,5:N1}%  mean {x.st.Mean,6:N2}  t {x.st.TStat,5:N2}  net with {x.st.Mean - FixedCost,6:N2} / fade {-x.st.Mean - FixedCost,6:N2}  | {Years(x.years, y => y.Mean)}");
+            }
+        }
     }
 
     // ------------------------------------------------------------------ H6: intraday momentum as a dose-response
