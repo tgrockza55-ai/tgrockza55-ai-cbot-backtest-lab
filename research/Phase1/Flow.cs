@@ -337,6 +337,69 @@ static partial class Phase1
             Rows("new 60-min price extreme, CVD confirms -> follow", confirm, 5, 15, 30);
             Rows("new 60-min price extreme, CVD does not -> fade", diverge, 5, 15, 30);
         }
+
+        // ------------------------------------------------------------------ 5) the two patterns worth a closer look (found on 2025-10..2026-03)
+        Console.WriteLine("\n-- 5) CLOSER LOOK: break of the Asia range, and the price leaving the 2-sd band around the day VWAP (both: follow) --");
+        {
+            string[] sesName = { "all sessions", "Asia 22-07 UTC", "London 07-13 UTC", "New York 13-21 UTC" };
+            var asia = new List<(int, int)>[4]; var band = new List<(int, int)>[4]; var poke = new List<(int, int)>();
+            for (int s = 0; s < 4; s++) { asia[s] = new List<(int, int)>(); band[s] = new List<(int, int)>(); }
+            for (int m = 131; m < n - 1; m++)
+            {
+                if (!Ok(m)) continue;
+                double u = usualRng[m - 1]; int hour = Hour(m), ses = hour < 7 || hour >= 22 ? 1 : hour < 13 ? 2 : 3;
+                // yesterday's high / low poked and the minute closes back behind it (the "sweep" of section 2), traded WITH the poke
+                if (!double.IsNaN(prevHigh[m]))
+                {
+                    if (MaxH(m - 30, m - 1) <= prevHigh[m] && H[m] > prevHigh[m] + 0.3 * u && C[m] < prevHigh[m]) poke.Add((m, 1));
+                    else if (MinL(m - 30, m - 1) >= prevLow[m] && L[m] < prevLow[m] - 0.3 * u && C[m] > prevLow[m]) poke.Add((m, -1));
+                }
+                if (!double.IsNaN(asiaHigh[m]) && ses >= 2)
+                {
+                    int side = MaxH(m - 30, m - 1) <= asiaHigh[m] && C[m] > asiaHigh[m] + u ? 1 : MinL(m - 30, m - 1) >= asiaLow[m] && C[m] < asiaLow[m] - u ? -1 : 0;
+                    if (side != 0) { asia[ses].Add((m, side)); asia[0].Add((m, side)); }
+                }
+                if (sdDay[m] > 0 && sdDay[m - 1] > 0 && (T[m] + 7200) % 86400 >= 3 * 3600)
+                {
+                    double z = (C[m] - vwapDay[m]) / sdDay[m], zPrev = (C[m - 1] - vwapDay[m - 1]) / sdDay[m - 1];
+                    if (Math.Abs(z) >= 2 && Math.Abs(zPrev) < 2) { band[ses].Add((m, Math.Sign(z))); band[0].Add((m, Math.Sign(z))); }
+                }
+            }
+            Rows("yesterday's high/low poked, closed back -> WITH the poke", poke, 5, 15, 30, 60);
+            Rows("Asia range break -> follow, " + sesName[0], asia[0], 5, 15, 30);
+            Rows("  " + sesName[2], asia[2], 5, 15, 30); Rows("  " + sesName[3], asia[3], 5, 15, 30);
+            for (int s = 0; s < 4; s++) Rows((s == 0 ? "leaves the 2-sd VWAP band -> follow, " : "  ") + sesName[s], band[s], 15, 30, 60);
+
+            // one trade at a time, the way a cBot would run it
+            Console.WriteLine("\none trade at a time (stop 5):");
+            Replay("PDX yesterday's high/low poked, closed back -> with the poke, hold 15", poke, 15, 5);
+            Replay("PDX the same, hold 30", poke, 30, 5);
+            Replay("VB  New York: leaves the 2-sd VWAP band -> follow, hold 15", band[3], 15, 5);
+            Replay("VB  New York: leaves the 2-sd VWAP band -> follow, hold 30", band[3], 30, 5);
+            Replay("VBL London: leaves the 2-sd VWAP band -> FADE, hold 15", band[2].Select(e => (e.Item1, -e.Item2)).ToList(), 15, 5);
+            Replay("AB  Asia range break -> follow, hold 15", asia[0], 15, 5);
+            Replay("AB  Asia range break -> follow, hold 30", asia[0], 30, 5);
+        }
+
+        void Replay(string label, List<(int m, int side)> events, int hold, double stop)
+        {
+            var st = new St(); double gw = 0, gl = 0, cum = 0, peak = 0, maxDd = 0; long freeAt = 0; int stops = 0;
+            var months = new SortedDictionary<string, double>(); var days = new Dictionary<long, double>();
+            foreach (var (m, side) in events)
+            {
+                if (T[m] < freeAt) continue;
+                double p = Trade(m, side, hold, stop); if (double.IsNaN(p)) continue;
+                freeAt = T[m] + 60 + hold * 60L;
+                if (p <= -stop) stops++;
+                st.Add(p); if (p > 0) gw += p; else gl -= p; cum += p; peak = Math.Max(peak, cum); maxDd = Math.Max(maxDd, peak - cum);
+                string key = DateTimeOffset.FromUnixTimeSeconds(T[m]).UtcDateTime.ToString("yy-MM", Inv);
+                months[key] = (months.TryGetValue(key, out double v) ? v : 0) + p;
+                days[T[m] / 86400] = (days.TryGetValue(T[m] / 86400, out double dv) ? dv : 0) + p;
+            }
+            if (st.N < 20) { Console.WriteLine($"{label}: n {st.N} (too few)"); return; }
+            Console.WriteLine($"{label}: n {st.N}  win {st.Win:N1}%  avg {st.Mean.ToString("+0.000;-0.000", Inv)}  PF {(gl > 0 ? gw / gl : 0):N2}  net {st.Sum:N0}  t {st.TStat:N2}  max DD {maxDd:N0}  stops {stops}  worst day {days.Values.Min():N1}  months+ {months.Values.Count(v => v > 0)}/{months.Count}");
+            Console.WriteLine("     by month: " + string.Join("  ", months.Select(kv => kv.Key + ": " + kv.Value.ToString("+0;-0", Inv))));
+        }
         return 0;
     }
 

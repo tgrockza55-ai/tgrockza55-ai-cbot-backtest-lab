@@ -14,6 +14,7 @@ cbot/BacktestLab/            ซอร์ส cBot (C#, cTrader Automate .NET 6)
   SwingTracker.cs            หาจุดสวิงสูง/ต่ำแบบไม่มี look-ahead ใช้ร่วมกันในทฤษฎีกราฟ
   Reporter.cs                POST ไป /ingest, เก็บ pending เมื่อส่งไม่ได้
   LiveRecorder.cs            บันทึกตลาดสดตอนรันบน Demo (tick, DOM, สรุปรายนาที, ออเดอร์) — ดูหัวข้อ "รันสดบนบัญชี Demo"
+  FlowTracker.cs             volume profile, anchored VWAP, delta/CVD, liquidity sweep แบบเรียลไทม์จากทุก tick (ต้องตรงกับ research\Phase1\Flow.cs)
 supabase/schema.sql          ตาราง strategies, backtest_runs, view strategy_stats + RLS
 supabase/migrations/*.sql    ส่วนเพิ่มของ schema (เช่น backtest_jobs) — ผู้ใช้รันใน SQL Editor ทีละไฟล์
 supabase/functions/lab/      Edge Function: /ingest, /progress, /runs, /runs/:id (GET, DELETE), /runs/:id/file, /health
@@ -107,6 +108,9 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
     เติม SL ที่ปลายแท่ง (แย่เกินจริง) → ชั้น 0 ใช้คัดกรองเท่านั้น ตัวตัดสินคือ tick · `SCALP_S3D` v2 (04/10/2026) ถือครบ 5 แท่งพอดีบน tick/ตลาดสด (v1 มักถือ 6)
 - **tick volume ของ feed ถูกจำกัดเพดาน ~550 ครั้ง/นาทีตั้งแต่ปี 2025** → เทียบ volume เป็น "เท่าของค่าเฉลี่ย" ไม่ได้ในตลาดปัจจุบัน ให้ใช้อันดับใน 24 ชม. และถือว่าหยาบ
   `study:h11` (`Volume.cs`) = พฤติกรรมราคา/volume บน M1: ไม่มีรูปแบบ volume ใดให้ระยะเกินต้นทุน; กฎ **LX** (สวนแท่งหมดแรงช่วงลอนดอน, `study:lx`) ผ่าน dev แต่ **ไม่ผ่าน test** (JOURNAL ลูปที่ 8)
+  `Phase1.exe flow` = ศึกษาระดับ tick 4 แนว (profile, sweep, VWAP, delta/CVD) บน 27 เดือน: แรงได้เปรียบก่อนต้นทุน ≈ 0 ทุกแนว; กฎ **PDX** ผ่าน dev ไม่ผ่าน test (JOURNAL ลูปที่ 9)
+  ข้อจำกัดเชิงโครงสร้าง: SL 5 USD โดนแตะ 50%+ ของไม้ในตลาดปัจจุบัน (กรอบ ~2.3 USD/นาที) → ทุน 100 USD กับ 0.01 lot ไม่เข้ากับความผันผวนนี้ ต้องบอกผู้ใช้ตรงๆ
+  ช่วง test (04–09/2026) ถูกเปิดดูแล้วกับ S3d, LX, PDX, VB, AB — กฎใหม่ต้องตรวจกับข้อมูลสดจาก Demo (ตั้งแต่ 05/10/2026) เท่านั้น
 - กฎ R1 = `CH_SESSION_MOM` (โมเมนตัมข้าม session, เข้า 07:00 และ 10:00 UTC, ปิด 20:45 UTC) กำไรครบ 3 ช่วงเดิม (run #49–#51)
   แต่ drawdown สูง (27–64% ของบัญชี 1,000) ใช้กับทุน 100 ไม่ได้ — หน้า `summary.html` แสดงกฎนี้
 
@@ -120,7 +124,15 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
 - robot ไม่ส่งคำสั่งบนบัญชีเงินจริงเด็ดขาด (`Account.IsLive` → บันทึกอย่างเดียว) และตอนเริ่มจะโหลดประวัติ ≥ 6,000 แท่งให้ทฤษฎี
 - `LiveRecorder.cs` เขียนลง `%LOCALAPPDATA%\BacktestLab\live\<symbol>\` (นอก OneDrive): `tick-<วัน>.csv` (ทุก tick), `book-<วัน>.csv` (DOM: ราคา:ปริมาณ ทุกชั้น),
   `min-<เดือน>.csv` (สรุปรายนาที + ข่าว + P(ขึ้น) + สัญญาณ), `trades.csv` (ราคาที่เห็น vs ราคาที่ได้, latency), `runs.csv` — ไฟล์วันเก่าถูกบีบเป็น .gz เอง (~2 MB/วัน)
+  **`flow-<เดือน>.csv`** (จาก `FlowTracker.cs`, หนึ่งแถวต่อนาที): delta/CVD, VWAP ของวันและของช่วง, volume profile POC/VAH/VAL ของวันนี้และวันก่อน,
+  High/Low ของวันก่อน / ช่วงเอเชีย / 60 นาที, รหัส sweep (PH PL AH AL RH RL), `dayWarm/prevWarm` (ค่าครบตั้งแต่ต้นวันไหม), `ladderBid/ladderAsk`
   ข่าวมาจาก `events.csv` + ปฏิทิน Forex Factory รายสัปดาห์ที่ตัวบันทึกดึงเองเมื่อขึ้นสัปดาห์ใหม่
+- **นิยามใน `FlowTracker.cs` (cBot) และ `research\Phase1\Flow.cs` ต้องเหมือนกันทุกประการ** (วันเทรดเริ่ม 22:00 UTC, ช่องราคา 0.5 USD, value area 70%, delta = ขึ้น−ลงของราคากลาง)
+  แก้แล้วตรวจ: `backtest.ps1 ... -RecordTo flow-check -NoSend` แล้ว `Phase1.exe flow flow-check 0000-00-00 9999-99-99 XAUUSD check` (ต้องต่างกัน 0)
+- วิเคราะห์ระดับ tick: `Phase1.exe flow <live|live-test> <จาก> <ถึง>` ครอบ volume profile, liquidity sweep, anchored VWAP, delta/CVD; เข้าออกด้วย bid/ask จริงของ tick
+  ประวัติ tick สร้างด้วย `backtest.ps1 -Record` ทีละ 3 เดือน (โฟลเดอร์ `live-test`; 33 เดือน = 1.2 GB ลบได้ สร้างใหม่ ~30 นาที)
+- DOM ของ XAUUSD ที่โบรกเกอร์นี้เป็นบันไดราคา 4 ชั้นขนาดตายตัว ไม่ใช่สมุดออเดอร์จริง — อย่าตีความ bidVol/askVol เป็นแรงซื้อขาย
+- **ผู้ใช้เคยกด Start ด้วยค่าเริ่มต้น `EMA_CROSS` สองครั้ง (05/10/2026) จนเปิดออเดอร์บน Demo** — ทุกครั้งที่ตรวจสถานะให้ดูชื่อทฤษฎีใน `runs.csv` แล้วเตือนถ้าไม่ใช่ที่ตั้งใจ
 - ตรวจว่ากำลังบันทึกอยู่: `tools\live-status.ps1` · วิเคราะห์: `Phase1.exe live` (6 ตาราง: tick ถี่/บาง → ราคาไปต่อ, DOM เอียง → ทิศ, สเปรดรายชั่วโมง, หลังข่าว, คำทำนายสด, slippage)
 - ทดสอบตัวบันทึกโดยไม่ต้องรอตลาด: `tools\backtest.ps1 ... -Record -NoSend` → โฟลเดอร์ `live-test` (ไม่มี DOM) แล้ว `Phase1.exe live-test`
 - ทองแบบ spot ไม่มี volume ซื้อขายจริงจากตลาดกลาง: สิ่งที่มีคือ tick volume (จำนวนครั้งที่ราคาเปลี่ยน) และ DOM ของผู้ให้สภาพคล่องของโบรกเกอร์ — บอกผู้ใช้ตรงๆ เมื่อสรุปผล
