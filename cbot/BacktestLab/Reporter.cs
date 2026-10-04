@@ -70,6 +70,19 @@ namespace cAlgo.Robots
             SavePending(bot, json);
         }
 
+        public static void SaveLocal(Robot bot, object report, string name)
+        {
+            try
+            {
+                var dir = Path.Combine(Folder, "local");
+                Directory.CreateDirectory(dir);
+                var file = Path.Combine(dir, name + ".json");
+                File.WriteAllText(file, JsonSerializer.Serialize(report));
+                bot.Print("Saved local copy: {0}", file);
+            }
+            catch (Exception e) { bot.Print("Could not save local copy: {0}", e.Message); }
+        }
+
         public static void RetryPending(Robot bot)
         {
             if (!Directory.Exists(PendingFolder)) return;

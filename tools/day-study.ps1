@@ -17,6 +17,8 @@ param(
     [string]$Symbol = "XAUUSD",
     [string]$Csv,
     [int]$AsiaEnd = 7,
+    [string]$From = "0000",      # yyyy-MM-dd, inclusive — keep rule-finding statistics out of the test period
+    [string]$To = "9999",        # yyyy-MM-dd, exclusive
     [string]$Out
 )
 
@@ -145,8 +147,8 @@ foreach ($d in $days) {
     }
     if ($d.AN + $d.RN -gt 0) { $prev = $d }
 }
+$rows = @($rows.ToArray() | Where-Object { $_.date -ge $From -and $_.date -lt $To })
 if ($rows.Count -eq 0) { Write-Host "No usable days in $Csv" -ForegroundColor Red; exit 1 }
-$rows = $rows.ToArray()
 
 # ---- three equal sub-periods, to see whether a statistic is stable over time ----
 $first = [DateTime]::ParseExact($rows[0].date, "yyyy-MM-dd", $inv)

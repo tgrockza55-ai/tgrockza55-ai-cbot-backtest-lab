@@ -45,8 +45,16 @@ namespace cAlgo.Robots
         [Parameter("Max stop (% of price)", DefaultValue = 0.5, MinValue = 0, Group = "Risk")]
         public double MaxStopPct { get; set; }
 
+        // เทรดในวัน: ถึงเวลานี้ (UTC, รูปแบบ HHmm เช่น 2045) ปิดทุกออเดอร์ และไม่เปิดใหม่จนพ้นช่วงตลาดพัก (23:00 UTC); 0 = ไม่ใช้
+        [Parameter("Flat at (UTC HHmm, 0 = off)", DefaultValue = 0, MinValue = 0, MaxValue = 2359, Group = "Risk")]
+        public int FlatTime { get; set; }
+
         [Parameter("Send results", DefaultValue = true, Group = "Report")]
         public bool SendResults { get; set; }
+
+        // งานวิจัยในเครื่อง: เขียนรายงานเป็นไฟล์ Documents\BacktestLab\local\<code>-<symbol>-<timeframe>.json
+        [Parameter("Save local copy", DefaultValue = false, Group = "Report")]
+        public bool SaveLocal { get; set; }
 
         [Parameter("Max equity points", DefaultValue = 5000, MinValue = 200, Group = "Report")]
         public int MaxEquityPoints { get; set; }
@@ -63,6 +71,7 @@ namespace cAlgo.Robots
         private bool _structureStops;
         // ราคา SL / TP ตอนเปิดของแต่ละ position (History ไม่เก็บไว้ให้)
         private readonly Dictionary<int, double?[]> _stops = new Dictionary<int, double?[]>();
+        private readonly Dictionary<int, TradePlan> _plans = new Dictionary<int, TradePlan>();
 
         // เทรดตัวอย่างที่แนบแท่งราคาไปให้หน้าเว็บวาดกราฟ: ต่อวันในสัปดาห์ เอาชนะ/แพ้อย่างละเท่านี้
         private const int ExamplesPerGroup = 2;
@@ -92,11 +101,15 @@ namespace cAlgo.Robots
         {
             _equity.Add(Server.Time, Account.Equity);
 
+            var flat = InFlatWindow(Server.Time);
             foreach (var pos in Positions.FindAll(Label, SymbolName))
-                if (_strategy.ShouldExit(pos)) ClosePosition(pos);
+            {
+                if (flat || _strategy.ShouldExit(pos)) ClosePosition(pos);
+                else Manage(pos);
+            }
 
-            var signal = _strategy.Signal();
-            if (signal == null) return;
+            var signal = _strategy.Signal();   // เรียกทุกแท่ง เพื่อให้สถานะของทฤษฎีเดินต่อเนื่อง
+            if (signal == null || flat) return;
 
             if (_strategy.ExitOnOppositeSignal)
                 foreach (var pos in Positions.FindAll(Label, SymbolName).Where(p => p.TradeType != signal.Value))
@@ -118,9 +131,55 @@ namespace cAlgo.Robots
                 tp = Math.Round(sl.Value * _strategy.RewardRisk, 1);
                 _structureStops = true;
             }
-            var result = ExecuteMarketOrder(signal.Value, SymbolName, volume, Label, sl, tp);
+            var result = ExecuteMarketOrder(signal.Value, SymbolName, volume, Label, sl, tp, _strategy.SignalTag);
             if (result.IsSuccessful && result.Position != null)
-                _stops[result.Position.Id] = new[] { result.Position.StopLoss, result.Position.TakeProfit };
+            {
+                var p = result.Position;
+                _stops[p.Id] = new[] { p.StopLoss, p.TakeProfit };
+                if (p.StopLoss.HasValue && (_strategy.BreakevenAtR > 0 || _strategy.CutAfterMinutes > 0))
+                    _plans[p.Id] = new TradePlan
+                    {
+                        R = Math.Abs(p.EntryPrice - p.StopLoss.Value),
+                        BreakevenAtR = _strategy.BreakevenAtR,
+                        CutAfterMinutes = _strategy.CutAfterMinutes,
+                        CutBelowR = _strategy.CutBelowR,
+                    };
+            }
+        }
+
+        private class TradePlan
+        {
+            public double R, BreakevenAtR, CutBelowR;
+            public int CutAfterMinutes;
+            public bool AtBreakeven, CutChecked;
+        }
+
+        /// <summary>จัดการออเดอร์ตามแผนของทฤษฎี: เลื่อน SL มากันทุน และตัดทิ้งเมื่อครบเวลาแล้วยังไม่ถึงระดับที่กำหนด — คืน true ถ้าปิดไปแล้ว</summary>
+        private bool Manage(Position pos)
+        {
+            TradePlan plan;
+            if (!_plans.TryGetValue(pos.Id, out plan) || plan.R <= 0) return false;
+            var profitR = pos.Pips * Symbol.PipSize / plan.R;
+
+            if (plan.CutAfterMinutes > 0 && !plan.CutChecked && (Server.Time - pos.EntryTime).TotalMinutes >= plan.CutAfterMinutes)
+            {
+                plan.CutChecked = true;
+                if (profitR < plan.CutBelowR) { ClosePosition(pos); return true; }
+            }
+            if (plan.BreakevenAtR > 0 && !plan.AtBreakeven && profitR >= plan.BreakevenAtR)
+            {
+                plan.AtBreakeven = true;
+                ModifyPosition(pos, pos.EntryPrice, pos.TakeProfit);
+            }
+            return false;
+        }
+
+        /// <summary>ช่วงห้ามถือออเดอร์: ตั้งแต่ FlatTime ถึง 23:00 UTC (ครอบช่วงตลาดพักประจำวันและคืนวันศุกร์)</summary>
+        private bool InFlatWindow(DateTime t)
+        {
+            if (FlatTime <= 0) return false;
+            var minutes = t.Hour * 60 + t.Minute;
+            return minutes >= (FlatTime / 100) * 60 + FlatTime % 100 && minutes < 23 * 60;
         }
 
         protected override void OnStop()
@@ -129,12 +188,14 @@ namespace cAlgo.Robots
             _equity.Add(Server.Time, Account.Equity, force: true);
             _strategy.OnStop();
 
-            if (RunningMode == RunningMode.RealTime || !SendResults || _strategy.IsUtility) return;
+            if (RunningMode == RunningMode.RealTime || _strategy.IsUtility || (!SendResults && !SaveLocal)) return;
 
             var openCount = Positions.FindAll(Label, SymbolName).Length;
             if (openCount > 0) Print("Note: {0} position(s) still open at the end are not counted as trades.", openCount);
 
-            Reporter.Send(this, BuildReport());
+            var report = BuildReport();
+            if (SaveLocal) Reporter.SaveLocal(this, report, _strategy.Code + "-" + SymbolName + "-" + TimeFrame);
+            if (SendResults) Reporter.Send(this, report);
         }
 
         private object BuildReport()
@@ -150,6 +211,7 @@ namespace cAlgo.Robots
             var netProfit = trades.Sum(t => t.NetProfit);
 
             var parameters = new Dictionary<string, object>(_strategy.NamedParams()) { ["Lots"] = Lots };
+            if (FlatTime > 0) parameters["FlatTimeUtc"] = FlatTime;
             if (_structureStops)
             {
                 parameters["MinStopPct"] = MinStopPct;
@@ -218,6 +280,7 @@ namespace cAlgo.Robots
                     ["swap"] = Round(t.Swap),
                     ["net"] = Round(t.NetProfit),
                 };
+                if (!string.IsNullOrEmpty(t.Comment)) row["tag"] = t.Comment;
                 double?[] stops;
                 if (_stops.TryGetValue(t.PositionId, out stops))
                 {

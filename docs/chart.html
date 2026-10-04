@@ -29,11 +29,11 @@ const COLS = [
 ];
 let runs = [], strategies = [], sortCol = 5, asc = false, showAll = false;
 
-/** รอบล่าสุดของแต่ละ ทฤษฎี + symbol + timeframe (runs เรียงใหม่สุดก่อนอยู่แล้ว) */
+/** รอบล่าสุดของแต่ละ ทฤษฎี + symbol + timeframe + ช่วงข้อมูล + พารามิเตอร์ (runs เรียงใหม่สุดก่อนอยู่แล้ว) */
 function latestPerSetup() {
   const seen = new Set();
   return runs.filter((r) => {
-    const k = `${r.strategy.id}|${r.symbol}|${r.timeframe}`;
+    const k = `${r.strategy.id}|${r.symbol}|${r.timeframe}|${(r.date_from ?? "").slice(0, 7)}|${JSON.stringify(r.params)}`;
     return seen.has(k) ? false : seen.add(k);
   });
 }

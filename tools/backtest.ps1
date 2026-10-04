@@ -23,8 +23,12 @@ param(
     [Nullable[double]]$Spread,                       # pips; with m1/open data the CLI default is 0 (too optimistic)
     [Nullable[double]]$Commission,                   # per million; CLI default 0
     [Nullable[double]]$MinStopPct, [Nullable[double]]$MaxStopPct,
+    [int]$FlatTime = 0,                              # intraday only: close everything at this UTC time (HHmm, e.g. 2045); 0 = off
     [string]$Note = "",
     [string]$Step = "",                              # shown with the progress on the website, e.g. "3/10"
+    [switch]$NoSend,                                 # research run: do not send the result to the lab
+    [switch]$SaveLocal,                              # also write the report to Documents\BacktestLab\local\<code>-<symbol>-<tf>.json
+    [switch]$CliReport,                              # keep ctrader-cli's own (very large) JSON report next to the log
     [switch]$Build,
     [int]$TimeoutMinutes = 30
 )
@@ -115,9 +119,13 @@ $a = @(
     "--symbol=$Symbol", "--period=$Period",
     ('"--start={0}"' -f $Start), ('"--end={0}"' -f $End),
     "--data-mode=$DataMode", ("--balance=" + $Balance.ToString($inv)),
-    "--full-access", ('--report-json="{0}.report.json"' -f $base),
-    "--StrategyCode=$Strategy"
+    "--full-access", "--StrategyCode=$Strategy"
 )
+# ctrader-cli's own JSON report is ~180 MB for a 3-year M1 run, so it is opt-in
+if ($CliReport) { $a += ('--report-json="{0}.report.json"' -f $base) }
+if ($FlatTime -gt 0) { $a += "--FlatTime=$FlatTime" }
+if ($NoSend) { $a += "--SendResults=false" }
+if ($SaveLocal) { $a += "--SaveLocal=true" }
 if ($null -ne $Spread) { $a += ("--spread=" + ([double]$Spread).ToString($inv)) }
 if ($null -ne $Commission) { $a += ("--commission=" + ([double]$Commission).ToString($inv)) }
 $named = [ordered]@{ P1 = $P1; P2 = $P2; P3 = $P3; P4 = $P4; Lots = $Lots; StopLossPips = $StopLossPips; TakeProfitPips = $TakeProfitPips
@@ -168,9 +176,9 @@ Write-Host ("Finished in {0} s. Log: {1}" -f [int]$sw.Elapsed.TotalSeconds, $log
 $lines = @(Get-Content $log -ErrorAction SilentlyContinue) + @(Get-Content "$log.err" -ErrorAction SilentlyContinue)
 $sent = $lines | Where-Object { $_ -match 'Sent to lab: .*"runId":(\d+)' } | Select-Object -Last 1
 $runId = if ($sent -and $sent -match '"runId":(\d+)') { [int]$Matches[1] } else { $null }
-$isUtility = [bool]($lines -match 'Exported \d+ bars')
+$isUtility = [bool]($lines -match 'Exported \d+ bars|Saved local copy')
 Send-Progress "Finished" 100 $(if ($ok -and ($runId -or $isUtility)) { "done" } else { "failed" }) $runId
-$lines | Where-Object { $_ -match 'Sent to lab|Lab responded|Send failed|Saved for retry|Missing config|config\.json error|Unknown strategy|Crashed|Exception|^Error|Exported ' } |
+$lines | Where-Object { $_ -match 'Sent to lab|Lab responded|Send failed|Saved for retry|Missing config|config\.json error|Unknown strategy|Crashed|Exception|^Error|Exported |Saved local copy' } |
     ForEach-Object { $_.Replace($ctid, "<ctid>") }
 
 # ctrader-cli prints its own summary as the last JSON object
@@ -179,6 +187,7 @@ for ($i = $lines.Count - 1; $i -ge 0; $i--) { if ($lines[$i].Trim() -eq "{") { $
 if ($start -ge 0) { $lines[$start..($lines.Count - 1)] | Where-Object { $_ -match '"\w+":' } | ForEach-Object { $_.Trim() } }
 
 if (-not $ok) { exit 1 }
+if ($NoSend) { exit 0 }
 if (-not ($lines -match 'Sent to lab')) {
     Write-Host "The result was NOT confirmed as sent to the lab. Check the log." -ForegroundColor Yellow
     exit 2

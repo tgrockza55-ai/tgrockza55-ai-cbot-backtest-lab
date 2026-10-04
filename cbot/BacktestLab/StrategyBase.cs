@@ -65,6 +65,18 @@ namespace cAlgo.Robots
         public virtual double? StopDistance(TradeType side) => null;
         public virtual double RewardRisk => 2;
 
+        /// <summary>
+        /// การจัดการออเดอร์หลังเข้า ของสัญญาณล่าสุด (หน่วย R = ระยะ SL ตอนเข้า) — robot จำไว้ต่อ position
+        ///   BreakevenAtR   กำไรถึงกี่ R แล้วเลื่อน SL มาที่ราคาเข้า (0 = ไม่ใช้)
+        ///   CutAfterMinutes / CutBelowR   ผ่านไปกี่นาทีแล้ว ถ้ายังต่ำกว่า CutBelowR ให้ปิด (0 = ไม่ใช้)
+        /// </summary>
+        public virtual double BreakevenAtR => 0;
+        public virtual int CutAfterMinutes => 0;
+        public virtual double CutBelowR => 0;
+
+        /// <summary>ป้ายของสัญญาณล่าสุด — robot ใส่เป็น Comment ของ position (ทฤษฎีรวมใช้แยกว่าออเดอร์มาจากทฤษฎีย่อยไหน)</summary>
+        public virtual string SignalTag => null;
+
         /// <summary>true = เครื่องมือ (เช่นส่งออกข้อมูล) ไม่ใช่ทฤษฎี — ไม่ส่งผลขึ้น lab</summary>
         public virtual bool IsUtility => false;
 

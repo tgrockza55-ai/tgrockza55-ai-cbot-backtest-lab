@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Backtest Lab · สรุป</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="stack" id="main"><p class="muted">กำลังโหลด…</p></main>
+<script type="module">
+import Chart from "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/auto/+esm";
+import { sb, requireSession, labApi, h, $, money, pct, num, date, dateTime, signClass, showError,
+  WEEKDAYS, tradeStats, weekdayStats, splitBar, mountJobs } from "./app.js";
+
+// ---------- ข้อสรุปจากการวิจัย (ตัวเลขทั้งหมดในหน้าคำนวณจากผลทดสอบจริงใน lab) ----------
+// ช่วงหากฎ   01/2020 – 02/2026 : ใช้เลือกทฤษฎี ส่วนผสม และวิธีออก
+// ช่วงทดสอบ  03/2026 – 09/2026 : ไม่เคยถูกใช้หากฎ — ตัวเลขที่ควรเชื่อ
+const COMBO = "CH_COMBO";
+const FINAL = { AsiaDays: 1, PdayMode: 2, PdayTP: 3, PdayCutMin: 240 };
+const TEST_FROM = "2026-03-01";
+const PDAY_MODE = { 1: "ไม่ใช้", 2: "เฉพาะ Buy", 3: "Buy และ Sell" };
+const LEGS = { PDAY: "ขา B · เบรก High วันก่อน (แกนหลัก)", ASIA: "ขา A · เบรกกรอบเอเชีย (เสริม)" };
+
+const VERDICT = {
+  CH_PDAY_BREAK: [true, "ใช้เฉพาะฝั่ง Buy: กำไรกับแผนการออกทั้ง 77 แบบที่ลองบนช่วงหากฎ ฝั่ง Sell ขาดทุนกับทุกแผน"],
+  CH_ASIA_BREAK: [true, "ใช้เฉพาะวันจันทร์ (กำไร 5 จาก 7 ปี) — วันอื่นรวมกันขาดทุน และทั้งชุดขาดทุนกับทุกแผนการออก"],
+  CH_HEAD_SHOULDERS: [false, "กำไรปีเดียวจาก 7 ปี"],
+  CH_DOUBLE_TB: [false, "ไม่มีปีไหนกำไรเลยใน 7 ปี"],
+  CH_NBAR_BREAK: [false, "ไม่มีปีไหนกำไรเลย ขาดทุนทุกช่วงเวลาของวัน"],
+  CH_ENGULF: [false, "ทรงแท่งเทียนบน M1: ชนะไม่ถึงจุดคุ้มทุนและโดนสเปรดกินทุกไม้ ไม่มีปีไหนกำไร"],
+  CH_PINBAR: [false, "ทรงแท่งเทียนบน M1: ชนะไม่ถึงจุดคุ้มทุนและโดนสเปรดกินทุกไม้ ไม่มีปีไหนกำไร"],
+  CH_INSIDE_BAR: [false, "ทรงแท่งเทียนบน M1: ชนะไม่ถึงจุดคุ้มทุนและโดนสเปรดกินทุกไม้ ไม่มีปีไหนกำไร"],
+  CH_SR_BOUNCE: [false, "ขาดทุนหนักที่สุด: แนวรับแนวต้านจากสวิงบน M1 ถูกทะลุบ่อยเกินไป"],
+  CH_BREAK_RETEST: [false, "ไม่มีปีไหนกำไรเลย"],
+};
+
+const stat = (label, value, cls = "") => h("div", { class: "stat" }, h("div", { class: "label" }, label), h("div", { class: `value ${cls}` }, value));
+const KEYS = ["AsiaDays", "PdayMode", "PdayTP", "PdayCutMin"];
+const same = (a, b) => KEYS.every((k) => Number(a?.[k]) === Number(b?.[k]));
+const isTest = (r) => (r.date_from ?? "") >= TEST_FROM;
+const intraday = (r) => Number(r.start_balance) === 1000 && r.params?.FlatTimeUtc;
+const asiaDays = (mask) => {
+  const d = String(mask).split("").filter((c) => c >= "1" && c <= "5").map((c) => WEEKDAYS[c - 1]);
+  return d.length === 5 ? "ทุกวัน" : d.length ? d.join(" ") : "ไม่ใช้";
+};
+const ruleLabel = (p) => `เบรกวันก่อน: ${PDAY_MODE[p.PdayMode] ?? p.PdayMode}, TP ${p.PdayTP} เท่า, ${Number(p.PdayCutMin) >= 9000 ? "ไม่ตัดตามเวลา" : `ตัดที่ ${p.PdayCutMin} นาที`} · กรอบเอเชีย: ${asiaDays(p.AsiaDays)}`;
+
+function statsRow(label, s, extra = "") {
+  return h("tr", { class: s.n > 0 && s.n < 30 ? "weak" : "" },
+    h("td", {}, label),
+    h("td", { class: "num" }, s.n),
+    h("td", { class: "num" }, pct(s.winPct)),
+    h("td", {}, splitBar(s.winPct, s.lossPct)),
+    h("td", { class: `num ${s.pf == null ? "" : signClass(s.pf - 1)}` }, num(s.pf)),
+    h("td", { class: `num ${signClass(s.net)}` }, money(s.net)),
+    h("td", { class: "num" }, money(s.avgWin)),
+    h("td", { class: "num" }, money(s.avgLoss)),
+    h("td", { class: "muted" }, extra || (s.n > 0 && s.n < 30 ? "ตัวอย่างน้อย" : "")));
+}
+const group = (t) => h("tr", { class: "group" }, h("td", { colspan: 9 }, t));
+const statsTable = (rows) => h("div", { class: "table-wrap" }, h("table", {},
+  h("thead", {}, h("tr", {}, ["", "เทรด", "ชนะ", "สัดส่วน", "PF", "Net", "เฉลี่ยไม้ชนะ", "เฉลี่ยไม้แพ้", ""].map((t, i) =>
+    h("th", { class: [1, 2, 4, 5, 6, 7].includes(i) ? "num" : null }, t)))),
+  h("tbody", {}, rows)));
+
+const tiles = (r) => h("div", { class: "stats" },
+  stat("Net", money(r.net_profit), signClass(r.net_profit)),
+  stat("ผลตอบแทนต่อเงินต้น", pct(100 * r.net_profit / r.start_balance), signClass(r.net_profit)),
+  stat("Profit factor", num(r.profit_factor)),
+  stat("Win rate", pct(r.win_rate)),
+  stat("จำนวนเทรด", r.total_trades),
+  stat("Max drawdown", pct(r.max_dd_pct), "neg"));
+
+function equityChart(canvas, trades, start) {
+  const css = getComputedStyle(document.documentElement);
+  const accent = css.getPropertyValue("--accent").trim(), grid = css.getPropertyValue("--border").trim(), muted = css.getPropertyValue("--muted").trim();
+  let bal = start;
+  const points = [{ x: Date.parse(trades[0]?.entryTime ?? 0), y: start }, ...trades.map((t) => ({ x: Date.parse(t.exitTime), y: (bal += t.net) }))];
+  new Chart(canvas, {
+    type: "line",
+    data: { datasets: [
+      { label: "เงินในบัญชี", data: points, borderColor: accent, borderWidth: 1.5, pointRadius: 0, tension: 0 },
+      { label: "เงินต้น", data: [{ x: points[0].x, y: start }, { x: points.at(-1).x, y: start }], borderColor: muted, borderDash: [4, 4], borderWidth: 1, pointRadius: 0 },
+    ] },
+    options: {
+      maintainAspectRatio: false, animation: false, parsing: false, normalized: true,
+      interaction: { mode: "nearest", axis: "x", intersect: false },
+      scales: {
+        x: { type: "linear", grid: { color: grid }, ticks: { color: muted, maxTicksLimit: 8, callback: (v) => date(v) } },
+        y: { grid: { color: grid }, ticks: { color: muted } },
+      },
+      plugins: {
+        legend: { labels: { color: muted, boxWidth: 12 } },
+        tooltip: { callbacks: { title: (items) => dateTime(items[0].parsed.x), label: (i) => ` ${i.dataset.label}: ${money(i.parsed.y)}` } },
+      },
+    },
+  });
+}
+
+const byKey = (trades, keyOf) => [...trades.reduce((m, t) => m.set(keyOf(t), [...(m.get(keyOf(t)) ?? []), t]), new Map())].sort(([a], [b]) => (a > b ? 1 : -1));
+const MONTHS = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+const monthLabel = (k) => `${MONTHS[Number(k.slice(5, 7)) - 1]} ${k.slice(0, 4)}`;
+
+function howTo(p) {
+  const both = Number(p.PdayMode) === 3, cut = Number(p.PdayCutMin), hours = cut / 60;
+  return h("section", { class: "card theory" },
+    h("h2", {}, "ใช้ยังไง"),
+    h("p", { class: "muted" }, "ทอง (XAUUSD) กราฟ M1 · เวลาด้านล่างเป็นเวลาไทย · ถือได้ทีละ 1 ออเดอร์ · ทุกออเดอร์ปิดภายในวัน · ทดสอบที่ 0.01 lot ต่อเงินต้น 1,000 ดอลลาร์"),
+    h("h3", {}, "ขา B (แกนหลัก) — เบรก High ของวันก่อน" + (both ? "" : " ฝั่ง Buy")),
+    h("ol", {},
+      h("li", {}, `ขีดเส้น High${both ? " และ Low" : ""} ของวันก่อน (วัน = 07:00 ถึง 07:00 น.)`),
+      h("li", {}, `แท่ง M1 ปิดเหนือ High ของวันก่อนเป็นครั้งแรกของวัน → Buy${both ? " (ปิดใต้ Low → Sell)" : " · ไม่ Sell ตอนราคาหลุด Low"}`),
+      h("li", {}, `SL = 1 ใน 4 ของกรอบวันก่อน · TP = ${p.PdayTP} เท่าของ SL (ปล่อยให้กำไรวิ่ง)`),
+      cut < 9000 && h("li", {}, `ผ่านไป ${Number.isInteger(hours) ? `${hours} ชั่วโมง` : `${cut} นาที`} แล้วยังติดลบ → ปิดทิ้ง ไม่รอ SL`)),
+    h("h3", {}, "ขา A (เสริม) — เบรกกรอบช่วงเอเชีย"),
+    asiaDays(p.AsiaDays) === "ไม่ใช้" ? h("p", {}, "ไม่ใช้ขานี้") : h("ol", {},
+      h("li", {}, `เทรดเฉพาะวัน: ${asiaDays(p.AsiaDays)}`),
+      h("li", {}, "ตีกรอบ High / Low ของราคาตั้งแต่ 07:00 ถึง 14:00 น. (วันจันทร์นับตั้งแต่ตลาดเปิด)"),
+      h("li", {}, "หลัง 14:00 น. แท่ง M1 ปิดเหนือกรอบ → Buy, ปิดใต้กรอบ → Sell (ฝั่งละครั้งต่อวัน)"),
+      h("li", {}, "SL = ครึ่งหนึ่งของความสูงกรอบ · TP = 3 เท่าของ SL"),
+      h("li", {}, "กำไรถึงครึ่งหนึ่งของ SL → เลื่อน SL มาที่ราคาเข้า (กันทุน)"),
+      h("li", {}, "ยังไม่ชน SL/TP → ปิดตอน 03:00 น.")),
+    h("h3", {}, "กติการ่วม"),
+    h("ul", {},
+      h("li", {}, "ถือทีละ 1 ออเดอร์: มีออเดอร์ฝั่งเดียวกันอยู่แล้ว → ข้ามสัญญาณใหม่ · เกิดสัญญาณฝั่งตรงข้าม → ปิดแล้วกลับฝั่ง"),
+      h("li", {}, "03:45 น. ปิดทุกออเดอร์ ไม่ว่ากำไรหรือขาดทุน และไม่เปิดใหม่จนตลาดเปิดรอบถัดไป"),
+      h("li", {}, "SL แคบสุด 0.05% และกว้างสุด 0.5% ของราคา")));
+}
+
+function exitWhy() {
+  return h("section", { class: "card theory" },
+    h("h2", {}, "ทำไมออกแบบนี้ (จากสถิติช่วงหากฎ)"),
+    h("p", { class: "muted" }, "ดูทุกเทรดของขา B ว่าหลังเข้าไปแล้วระยะหนึ่ง เทรดที่อยู่ระดับเดียวกันในอดีตจบยังไง · หน่วย R = ระยะ SL ตอนเข้า"),
+    h("ul", {},
+      h("li", {}, h("b", {}, "กำไรแล้วให้ถือต่อ: "), "เทรดที่กำไรเกิน 1R ภายใน 1 ชั่วโมง จบบวก 92% และถือต่อได้เพิ่มเฉลี่ยอีก 0.36R — จึงตั้ง TP ไกล 3R แทน 2R"),
+      h("li", {}, h("b", {}, "ติดลบนานแล้วให้ตัด: "), "เทรดที่ผ่าน 4 ชั่วโมงแล้วยังติดลบ กลับมาจบบวกแค่ 14–24% และถือต่อเสียเพิ่มเฉลี่ย 0.2–0.3R — จึงปิดทิ้งที่ 4 ชั่วโมง"),
+      h("li", {}, h("b", {}, "ติดลบช่วงแรกยังไม่ต้องรีบ: "), "เทรดที่ติดลบ 0.25–0.5R ใน 15–30 นาทีแรก ถือต่อดีขึ้นเฉลี่ย 0.2R — จึงไม่ตัดเร็วกว่านั้น"),
+      h("li", {}, h("b", {}, "ผลของการจัดการ: "), "จุดเข้าชุดเดียวกัน แบบไม่จัดการ (TP 2R) เทียบกับแบบนี้ ดูได้ในตาราง \"แบบอื่นที่ลอง\" ด้านล่าง")));
+}
+
+async function load() {
+  mountJobs();
+  const { data: runs, error } = await sb.from("backtest_runs")
+    .select("*, strategy:strategies!inner(id, code, version, name)")
+    .like("strategy.code", "CH_%").order("created_at", { ascending: false }).limit(2000);
+  if (error) throw error;
+
+  const combos = runs.filter((r) => r.strategy.code === COMBO && intraday(r));
+  const testRun = combos.find((r) => same(r.params, FINAL) && isTest(r));
+  const ruleRun = combos.find((r) => same(r.params, FINAL) && !isTest(r));
+  const main = $("#main"), jobs = $("#main .jobs");
+  if (!testRun || !ruleRun) {
+    main.replaceChildren(jobs, h("h1", {}, "สรุป"), h("p", { class: "empty" }, "ยังไม่มีผลทดสอบของทฤษฎีรวม (CH_COMBO) ครบทั้งช่วงหากฎและช่วงทดสอบ"));
+    return;
+  }
+
+  const [testFile, ruleFile] = await Promise.all([labApi(`/runs/${testRun.id}/file`), labApi(`/runs/${ruleRun.id}/file`)]);
+  const tt = testFile.trades ?? [], rt = ruleFile.trades ?? [];
+  const testCanvas = h("canvas", { "aria-label": "เงินในบัญชี ช่วงทดสอบ" }), ruleCanvas = h("canvas", { "aria-label": "เงินในบัญชี ช่วงหากฎ" });
+  const singles = Object.keys(VERDICT).map((code) => runs.find((r) => r.strategy.code === code && intraday(r) && !isTest(r))).filter(Boolean);
+  const variants = [...new Map(combos.map((r) => [KEYS.map((k) => r.params[k]).join("|"), r.params])).values()].map((p) => ({
+    p, rule: combos.find((r) => same(r.params, p) && !isTest(r)), test: combos.find((r) => same(r.params, p) && isTest(r)),
+  })).sort((a, b) => (b.rule?.net_profit ?? -1e9) - (a.rule?.net_profit ?? -1e9));
+  const legRows = (trades) => Object.entries(LEGS).map(([tag, label]) => statsRow(label, tradeStats(trades.filter((t) => t.tag === tag))));
+
+  main.replaceChildren(
+    jobs,
+    h("div", {},
+      h("h1", {}, "สรุป: ใช้ทฤษฎีไหน ผสมอะไร ใช้ยังไง"),
+      h("p", { class: "muted" }, "ทอง XAUUSD · แท่ง M1 จริง · สเปรด 2 pips · เงินต้น 1,000 · 0.01 lot ต่อไม้ · ทีละ 1 ออเดอร์ · ปิดทุกออเดอร์ภายในวัน")),
+    h("section", { class: "card" },
+      h("h2", {}, testRun.net_profit > 0 ? "ผลทดสอบ: ผ่าน — กำไรในช่วงที่ไม่เคยใช้หากฎ" : "ผลทดสอบ: ไม่ผ่าน — ขาดทุนในช่วงที่ไม่เคยใช้หากฎ"),
+      h("p", {},
+        `ทฤษฎีรวมที่ดีที่สุดจากช่วงหากฎ ทำได้ `, h("b", { class: signClass(ruleRun.net_profit) }, money(ruleRun.net_profit)), ` (PF ${num(ruleRun.profit_factor)}) ใน 6 ปีที่ใช้หากฎ `,
+        `แต่เมื่อนำไปทดสอบกับ ${date(testRun.date_from)} – ${date(testRun.date_to)} ได้ `, h("b", { class: signClass(testRun.net_profit) }, money(testRun.net_profit)),
+        ` (PF ${num(testRun.profit_factor)}, ${testRun.total_trades} เทรด) จากเงินต้น ${money(testRun.start_balance)}`),
+      testRun.net_profit > 0
+        ? h("p", { class: "muted" }, "ผลบวกในช่วงทดสอบเป็นสัญญาณที่ดี แต่ 7 เดือนยังสั้นเกินกว่าจะสรุปว่าได้เปรียบจริง")
+        : h("p", { class: "muted" }, "แปลว่าความได้เปรียบที่เห็นในช่วงหากฎยังไม่พิสูจน์ว่ามีจริง — ยังไม่ควรใช้ทฤษฎีนี้กับเงินจริง กฎด้านล่างคือสิ่งที่ดีที่สุดที่หาได้จากข้อมูล ไม่ใช่สูตรที่การันตีผล")),
+    h("section", { class: "card" },
+      h("h2", {}, `ทฤษฎีที่เลือก: 2 จาก ${Object.keys(VERDICT).length}`),
+      h("p", {}, "แกนหลักคือ ", h("b", {}, "เบรก High ของวันก่อน ฝั่ง Buy"), " เสริมด้วย ", h("b", {}, "เบรกกรอบช่วงเอเชีย เฉพาะวันจันทร์"),
+        " · ทฤษฎีที่ดูทรงบนแท่ง M1 (แท่งเทียนกลับตัว ทรงกลับตัว แนวรับแนวต้านจากสวิง) ขาดทุนทุกตัวตลอด 6 ปี จึงไม่นำมาใช้"),
+      h("p", { class: "muted" }, "กฎทั้งหมดเลือกจากข้อมูล ม.ค. 2020 – ก.พ. 2026 แล้วล็อกไว้ ก่อนนำไปทดสอบกับ มี.ค. – ก.ย. 2026")),
+
+    h("section", { class: "stack" },
+      h("h2", {}, `ผลทดสอบจริง: ${date(testRun.date_from)} – ${date(testRun.date_to)} (ข้อมูลที่ไม่เคยใช้หากฎ)`),
+      tiles(testRun),
+      h("section", { class: "card" }, h("div", { class: "chart-box" }, testCanvas)),
+      statsTable([
+        group("รายเดือน"),
+        ...byKey(tt, (t) => t.entryTime.slice(0, 7)).map(([k, ts]) => statsRow(monthLabel(k), tradeStats(ts))),
+        group("แยกตามขา"), ...legRows(tt),
+        group("แยกตามวันที่เข้าเทรด"), ...weekdayStats(tt).map((s, i) => statsRow(WEEKDAYS[i], s)),
+        group("รวม"), statsRow("ทั้งช่วงทดสอบ", tradeStats(tt)),
+      ]),
+      h("p", {}, h("a", { href: `run.html?id=${testRun.id}` }, `ดูรอบทดสอบ #${testRun.id}: รายการเทรดและกราฟตัวอย่างตอนเกิดสัญญาณ →`))),
+
+    h("section", { class: "stack" },
+      h("h2", {}, `ช่วงหากฎ: ${date(ruleRun.date_from)} – ${date(ruleRun.date_to)}`),
+      h("p", { class: "notice" }, "ตัวเลขช่วงนี้ดีเกินจริงเสมอ เพราะกฎถูกเลือกให้เข้ากับข้อมูลชุดนี้ ใช้ดูความสม่ำเสมอรายปี ไม่ใช่ใช้คาดหวังผล"),
+      tiles(ruleRun),
+      h("section", { class: "card" }, h("div", { class: "chart-box" }, ruleCanvas)),
+      statsTable([
+        group("รายปี"),
+        ...byKey(rt, (t) => t.entryTime.slice(0, 4)).map(([k, ts]) => statsRow(k, tradeStats(ts))),
+        group("แยกตามขา"), ...legRows(rt),
+        group("แยกตามฝั่ง"),
+        statsRow("Buy", tradeStats(rt.filter((t) => t.side === "Buy"))), statsRow("Sell", tradeStats(rt.filter((t) => t.side === "Sell"))),
+      ]),
+      h("p", {}, h("a", { href: `run.html?id=${ruleRun.id}` }, `ดูรอบ #${ruleRun.id} →`))),
+
+    howTo(FINAL),
+    exitWhy(),
+
+    h("section", { class: "stack" },
+      h("h2", {}, "ทุกทฤษฎี: ใช้ / ไม่ใช้ เพราะอะไร"),
+      h("p", { class: "muted" }, "ผลเดี่ยวของแต่ละทฤษฎีบนช่วงหากฎ ด้วยกติกาเดียวกัน (ทีละ 1 ออเดอร์ ปิดในวัน เงินต้น 1,000 — หมดตัวแล้วหยุดเทรด)"),
+      h("div", { class: "table-wrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, ["ทฤษฎี", "", "เทรด", "Win", "PF", "Net", "Max DD", "เหตุผล"].map((t, i) =>
+          h("th", { class: i >= 2 && i <= 6 ? "num" : null }, t)))),
+        h("tbody", {}, singles.map((r) => {
+          const [use, why] = VERDICT[r.strategy.code];
+          return h("tr", { class: "link", tabindex: 0, onclick: () => location.href = `run.html?id=${r.id}` },
+            h("td", {}, r.strategy.name),
+            h("td", {}, h("span", { class: "tag" }, use ? "✓ ใช้บางส่วน" : "✕ ไม่ใช้")),
+            h("td", { class: "num" }, r.total_trades),
+            h("td", { class: "num" }, pct(r.win_rate)),
+            h("td", { class: "num" }, num(r.profit_factor)),
+            h("td", { class: `num ${signClass(r.net_profit)}` }, money(r.net_profit)),
+            h("td", { class: "num" }, pct(r.max_dd_pct)),
+            h("td", { style: "white-space:normal;min-width:280px" }, why));
+        }))))),
+
+    h("section", { class: "stack" },
+      h("h2", {}, "แบบอื่นที่ลอง"),
+      h("p", { class: "muted" }, "เลือกแบบที่ Net ช่วงหากฎสูงสุด โดยไม่ดูช่วงทดสอบ · คอลัมน์ช่วงทดสอบแสดงให้เห็นว่าการเลือกนั้นออกมาเป็นยังไง"),
+      h("div", { class: "table-wrap" }, h("table", {},
+        h("thead", {}, h("tr", {}, ["กฎ", "หากฎ: เทรด", "PF", "Net", "Max DD", "ทดสอบ: เทรด", "PF", "Net", "Max DD", ""].map((t, i) => h("th", { class: i >= 1 && i <= 8 ? "num" : null }, t)))),
+        h("tbody", {}, variants.map((v) => h("tr", {},
+          h("td", { style: "white-space:normal;min-width:300px" }, ruleLabel(v.p)),
+          ...[v.rule, v.test].flatMap((r) => r ? [
+            h("td", { class: "num" }, h("a", { href: `run.html?id=${r.id}` }, r.total_trades)),
+            h("td", { class: "num" }, num(r.profit_factor)),
+            h("td", { class: `num ${signClass(r.net_profit)}` }, money(r.net_profit)),
+            h("td", { class: "num" }, pct(r.max_dd_pct)),
+          ] : [h("td", { class: "num muted", colspan: 4 }, "–")]),
+          h("td", {}, same(v.p, FINAL) ? h("span", { class: "tag" }, "แบบที่เลือก") : ""))))))),
+
+    h("section", { class: "card" },
+      h("h2", {}, "ข้อควรระวัง"),
+      h("ul", {},
+        h("li", {}, "ช่วงทดสอบมีแค่ 7 เดือน จำนวนเทรดไม่มาก ผลดีหรือแย่ในช่วงสั้นขนาดนี้ยังเป็นเรื่องของโชคได้มาก"),
+        h("li", {}, "แกนหลักเป็นฝั่ง Buy อย่างเดียว ตลอดช่วงข้อมูลทองขึ้นจากราว 1,520 เป็นกว่า 4,000 ดอลลาร์ ถ้าทองเปลี่ยนเป็นขาลงยาว ทฤษฎีนี้อาจไม่ได้ผล"),
+        h("li", {}, "ผลคิดสเปรดคงที่ 2 pips ไม่มี commission ไม่มี slippage และไม่มีสเปรดถ่างช่วงข่าว — ผลจริงจะแย่กว่านี้"),
+        h("li", {}, "เงื่อนไขย่อย (เฉพาะ Buy, เฉพาะวันจันทร์) เลือกมาจากการดูหลายสิบแบบ บางส่วนอาจดูดีเพราะบังเอิญ"),
+        h("li", {}, "ยังไม่ใช่หลักฐานพอสำหรับเงินจริง ควรทดลองในบัญชี Demo ต่ออีกหลายเดือน และใช้ขนาดเทรดเล็กกว่าที่ทดสอบ"))),
+  );
+
+  if (tt.length) equityChart(testCanvas, tt, Number(testRun.start_balance));
+  if (rt.length) equityChart(ruleCanvas, rt, Number(ruleRun.start_balance));
+}
+
+const session = await requireSession();
+if (session) {
+  try { await load(); } catch (e) { $("#main").replaceChildren(); showError(e); }
+}
+</script>
+</body>
+</html>

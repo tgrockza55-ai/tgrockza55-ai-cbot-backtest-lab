@@ -16,11 +16,12 @@ cbot/BacktestLab/            ซอร์ส cBot (C#, cTrader Automate .NET 6)
 supabase/schema.sql          ตาราง strategies, backtest_runs, view strategy_stats + RLS
 supabase/migrations/*.sql    ส่วนเพิ่มของ schema (เช่น backtest_jobs) — ผู้ใช้รันใน SQL Editor ทีละไฟล์
 supabase/functions/lab/      Edge Function: /ingest, /progress, /runs, /runs/:id (GET, DELETE), /runs/:id/file, /health
-docs/                        เว็บ (GitHub Pages): index, run, strategies, chart (ทฤษฎีกราฟ), daystudy (สถิติรายวัน) + app.js, config.js
+docs/                        เว็บ (GitHub Pages): summary (สรุป), index, run, strategies, chart (ทฤษฎีกราฟ), daystudy (สถิติรายวัน) + app.js, config.js
 docs/data/daystudy-*.json    ผลสถิติรายวัน (สร้างโดย tools\day-study.ps1; เป็นไฟล์สาธารณะ)
 tools/sync-cbot.ps1          ก๊อปซอร์สไป Documents\cAlgo\Sources\Robots\BacktestLab\BacktestLab + สร้าง config
 tools/backtest.ps1           รัน backtest 1 รอบผ่าน cTrader CLI (เพิ่ม -Build เพื่อ sync + build ก่อน)
-tools/day-study.ps1          สถิติ "วันนี้ของสัปดาห์ + ทรงนี้ → ขึ้น/ลงกี่ %" จาก CSV ของ DATA_EXPORT
+tools/day-study.ps1          สถิติ "วันนี้ของสัปดาห์ + ทรงนี้ → ขึ้น/ลงกี่ %" จาก CSV ของ DATA_EXPORT (-From/-To จำกัดช่วง)
+tools/exit-study.ps1         วิจัยการออกจากเทรด: จำลองแผนการออกบนแท่ง M1 จากรายงานที่เก็บในเครื่อง
 .mcp.json                    เชื่อม MCP ของ cTrader (project scope)
 ```
 
@@ -62,6 +63,22 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
 นิยาม (UTC): ช่วงเช้า = เปิดวันถึง 07:00, ช่วงที่เหลือ = 07:00 ถึงปิดวัน, ผล = ราคาปิดวันเทียบราคา ณ 07:00
 กลุ่มที่มี < 30 วันเชื่อถือได้น้อย — ดูช่วงเชื่อมั่น 95% และ % แยกรายปีประกอบเสมอ ไม่มี Python ในเครื่องผู้ใช้ ใช้ PowerShell
 
+### วิจัยหาส่วนผสมของทฤษฎี (ขั้นตอนที่ใช้กับ CH_COMBO)
+
+กติกาของผู้ใช้: ถือทีละ 1 ออเดอร์ และปิดทุกออเดอร์ภายในวัน (`-FlatTime 2045` = 20:45 UTC ก่อนตลาดทองพักทั้งฤดูร้อน/หนาว)
+ช่วงหากฎ 01/2020–02/2026, ช่วงทดสอบ 03/2026–09/2026 — **เลือกทฤษฎี/เงื่อนไข/วิธีออกจากช่วงหากฎเท่านั้น แล้วห้ามแก้กฎหลังเห็นผลช่วงทดสอบ**
+
+1. รันทุกทฤษฎีบนช่วงหากฎแบบเก็บในเครื่อง: `tools\backtest.ps1 ... -Balance 100000 -NoSend -SaveLocal` → `Documents\BacktestLab\local\<code>-<symbol>-<tf>.json`
+   (เงินต้นสูงเพื่อให้ได้รายการเทรดครบช่วง; ผลที่ขึ้นเว็บใช้เงินต้น 1,000 ตามที่ผู้ใช้กำหนด — หมดตัวแล้วหยุดเทรด)
+2. ดูความสม่ำเสมอรายปีและเงื่อนไขย่อย (ฝั่ง, ช่วงเวลา, วัน) — ยิ่งดูหลายช่อง ยิ่งเจอช่องที่ดูดีโดยบังเอิญ ต้องบอกผู้ใช้
+3. `tools\exit-study.ps1 -Report <ชื่อไฟล์ local> [-Side Buy] [-Weekdays 1] [-HourFrom/-HourTo]` — ตารางสถานะ ("ผ่านไป N นาที อยู่ระดับนี้ จบยังไง")
+   และตารางแผนการออก (TP, เลื่อน SL กันทุน, ตัดตามเวลา) ในหน่วย R = ระยะ SL ตอนเข้า; เป็นการจำลอง ต้องยืนยันด้วย backtest จริง
+4. ใส่กฎลงทฤษฎีรวม: `StrategyBase.BreakevenAtR` / `CutAfterMinutes` / `CutBelowR` / `SignalTag` (robot จัดการต่อ position)
+5. ส่งผลช่วงหากฎและช่วงทดสอบเข้า lab (เงินต้น 1,000) → หน้า `summary.html` (ค่าคงที่ `FINAL`, `TEST_FROM`, `VERDICT` ในไฟล์)
+
+ผลรอบแรก (04/10/2026): ทฤษฎีรวมที่ดีสุดในช่วงหากฎ (+1,140, PF 1.27) **ขาดทุนในช่วงทดสอบ** (-233.50, PF 0.77) — ทองร่วงจาก ~5,400 เป็น ~4,190
+และแกนหลักเป็นฝั่ง Buy อย่างเดียว ทฤษฎีที่ดูทรงบนแท่ง M1 ทั้งหมดขาดทุนตลอด 6 ปี
+
 ## รัน backtest ผ่าน cTrader CLI
 
 ต้องมี `ctrader-cli` ใน PATH และไฟล์ตั้งค่าต่อเครื่อง `Documents\BacktestLab\cli.json` (ไม่อยู่ใน repo; ครั้งแรกสคริปต์จะถามแล้วสร้างให้):
@@ -73,15 +90,15 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\backtest.ps1 -Strategy EMA_CROSS -Symbol EURUSD -Period h1 `
     -Start "01/01/2025 00:00" -End "30/06/2025 00:00" -P1 9 -P2 21
-# ตัวเลือก: -P3 -P4 -Lots -StopLossPips -TakeProfitPips -MinStopPct -MaxStopPct -Spread -Commission
-#           -Balance -DataMode (ticks|m1|open) -Note -TimeoutMinutes
+# ตัวเลือก: -P3 -P4 -Lots -StopLossPips -TakeProfitPips -MinStopPct -MaxStopPct -Spread -Commission -FlatTime (HHmm UTC)
+#           -Balance -DataMode (ticks|m1|open) -Note -Step -TimeoutMinutes -NoSend -SaveLocal -CliReport
 # -Build = sync ซอร์สจาก repo + build .algo ก่อนรัน (ใช้ทุกครั้งที่แก้ไฟล์ใน cbot/)
 ```
 
 - สำเร็จเมื่อเห็น `Sent to lab: {"ok":true,"runId":N,...,"driveError":null}` (exit code 0; 2 = ไม่ยืนยันว่าส่งถึง lab)
 - ผลขึ้น lab/เว็บเองทันทีที่จบ (cBot ส่งเอง ไม่เกี่ยวกับ git) และระหว่างรันสคริปต์ส่งความคืบหน้า % ไป `POST /progress`
   → ตาราง `backtest_jobs` → แถบ "กำลังทดสอบ" บนหน้าแรกและหน้าทฤษฎีกราฟ; รันหลายตัวต่อกันให้ใส่ `-Step "3/10"`
-- log เต็มอยู่ที่ `Documents\BacktestLab\logs\`
+- log เต็มอยู่ที่ `Documents\BacktestLab\logs\` (อยู่ใน OneDrive ของผู้ใช้ — อย่าเปิด `-CliReport` โดยไม่จำเป็น ไฟล์รายงานของ CLI ใหญ่ ~180 MB ต่อรอบ)
 - วันที่เป็น `dd/MM/yyyy HH:mm` (UTC) และวัน `-End` ถูกนับรวมทั้งวัน
 - **ใส่ `-Spread` ทุกครั้ง** (หน่วย pips): กับข้อมูล m1 ค่าเริ่มต้นของ CLI คือสเปรด 0 และ commission 0 ผลจะดีเกินจริงมาก
   ทอง (XAUUSD, 1 pip = 0.1) ใช้ `-Spread 2`; EURUSD ใช้ราว `-Spread 1`
