@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Backtest Lab · ทฤษฎีกราฟ</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="stack" id="main"><p class="muted">กำลังโหลด…</p></main>
+<script type="module">
+import { sb, requireSession, labApi, h, $, money, pct, num, date, signClass, describe, showError,
+  WEEKDAYS, weekdayStats } from "./app.js";
+
+// ทฤษฎีกราฟ = ทฤษฎีที่ใช้ราคาอย่างเดียว (Code ขึ้นต้นด้วย CH_)
+const PREFIX = "CH_";
+const perTrade = (r) => (r.total_trades ? r.net_profit / r.total_trades : null);
+
+const COLS = [
+  { label: "ทฤษฎี", fmt: (r) => r.strategy.name, sort: (r) => r.strategy.name },
+  { label: "Symbol · TF", fmt: (r) => `${r.symbol} · ${r.timeframe}`, sort: (r) => r.symbol },
+  { label: "ช่วงข้อมูล", fmt: (r) => `${date(r.date_from)} – ${date(r.date_to)}`, sort: (r) => r.date_from },
+  { label: "เทรด", num: true, fmt: (r) => r.total_trades ?? "–", sort: (r) => r.total_trades },
+  { label: "Win", num: true, fmt: (r) => pct(r.win_rate), sort: (r) => r.win_rate },
+  { label: "PF", num: true, fmt: (r) => num(r.profit_factor), sort: (r) => r.profit_factor },
+  { label: "Net", num: true, fmt: (r) => money(r.net_profit), sort: (r) => r.net_profit, cls: (r) => signClass(r.net_profit) },
+  { label: "เฉลี่ย/เทรด", num: true, fmt: (r) => num(perTrade(r)), sort: perTrade, cls: (r) => signClass(perTrade(r)) },
+  { label: "Max DD", num: true, fmt: (r) => pct(r.max_dd_pct), sort: (r) => r.max_dd_pct },
+];
+let runs = [], strategies = [], sortCol = 5, asc = false, showAll = false;
+
+/** รอบล่าสุดของแต่ละ ทฤษฎี + symbol + timeframe (runs เรียงใหม่สุดก่อนอยู่แล้ว) */
+function latestPerSetup() {
+  const seen = new Set();
+  return runs.filter((r) => {
+    const k = `${r.strategy.id}|${r.symbol}|${r.timeframe}`;
+    return seen.has(k) ? false : seen.add(k);
+  });
+}
+
+function compareTable() {
+  const key = COLS[sortCol].sort;
+  const list = [...(showAll ? runs : latestPerSetup())].sort((a, b) => {
+    const x = key(a) ?? -Infinity, y = key(b) ?? -Infinity;
+    return (x > y ? 1 : x < y ? -1 : 0) * (asc ? 1 : -1);
+  });
+  return h("div", { class: "table-wrap" }, h("table", {},
+    h("thead", {}, h("tr", {}, COLS.map((c, i) => h("th", {
+      class: ["sortable", c.num && "num", i === sortCol && "sorted", i === sortCol && asc && "asc"].filter(Boolean).join(" "),
+      onclick: () => { asc = sortCol === i ? !asc : false; sortCol = i; render(); },
+    }, c.label)))),
+    h("tbody", {}, list.length ? list.map((r) => h("tr", {
+      class: "link", tabindex: 0,
+      onclick: () => location.href = `run.html?id=${r.id}`,
+      onkeydown: (e) => e.key === "Enter" && (location.href = `run.html?id=${r.id}`),
+    }, COLS.map((c) => h("td", { class: [c.num && "num", c.cls?.(r)].filter(Boolean).join(" ") }, c.fmt(r)))))
+      : h("tr", {}, h("td", { colspan: COLS.length, class: "empty" }, "ยังไม่มีผลทดสอบของทฤษฎีกราฟ"))),
+  ));
+}
+
+// ---------- ทฤษฎี × วันในสัปดาห์ (คำนวณจากรายการเทรดใน Drive ของรอบล่าสุดของแต่ละทฤษฎี) ----------
+const weekdayCache = new Map();   // run id -> สถิติ 5 วัน | "error"
+let metric = "winPct";
+const METRICS = {
+  winPct: { label: "% ชนะ", fmt: (s) => pct(s.winPct), cls: () => "" },
+  pf: { label: "Profit factor", fmt: (s) => num(s.pf), cls: (s) => (s.pf == null ? "" : signClass(s.pf - 1)) },
+  net: { label: "Net", fmt: (s) => money(s.net), cls: (s) => signClass(s.net) },
+};
+const latestRuns = () => strategies.map((s) => runs.find((r) => r.strategy.id === s.id)).filter(Boolean);
+
+function weekdayMatrix() {
+  const m = METRICS[metric];
+  const sel = h("select", { "aria-label": "ค่าที่แสดง", oninput: (e) => { metric = e.target.value; render(); } },
+    Object.entries(METRICS).map(([k, v]) => h("option", { value: k }, v.label)));
+  sel.value = metric;
+  return h("section", { class: "stack" },
+    h("h2", {}, "ทฤษฎี × วันในสัปดาห์"),
+    h("div", { class: "toolbar" }, sel,
+      h("span", { class: "count" }, "ตัวเลขในวงเล็บ = จำนวนเทรดของวันนั้น · ตัวจาง = น้อยกว่า 30 เทรด · คลิกแถวเพื่อดูกราฟตัวอย่าง")),
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "ทฤษฎี (รอบล่าสุด)"), WEEKDAYS.map((d) => h("th", { class: "num" }, d)))),
+      h("tbody", {}, latestRuns().map((r) => {
+        const stats = weekdayCache.get(r.id);
+        return h("tr", { class: "link", tabindex: 0, onclick: () => location.href = `run.html?id=${r.id}`,
+          onkeydown: (e) => e.key === "Enter" && (location.href = `run.html?id=${r.id}`) },
+          h("td", {}, `${r.strategy.name} `, h("span", { class: "muted" }, `#${r.id}`)),
+          WEEKDAYS.map((_, i) => {
+            if (!stats) return h("td", { class: "num muted" }, "…");
+            if (stats === "error") return h("td", { class: "num muted" }, "–");
+            const st = stats[i];
+            return h("td", { class: `num ${st.n < 30 ? "muted" : m.cls(st)}` }, `${m.fmt(st)} (${st.n})`);
+          }));
+      })),
+    )));
+}
+
+async function loadWeekdays() {
+  for (const r of latestRuns()) {
+    if (weekdayCache.has(r.id)) continue;
+    try {
+      const file = r.drive_file_id ? await labApi(`/runs/${r.id}/file`) : null;
+      weekdayCache.set(r.id, file ? weekdayStats(file.trades ?? []) : "error");
+    } catch (e) { console.error(e); weekdayCache.set(r.id, "error"); }
+    render();
+  }
+}
+
+function card(s) {
+  const mine = runs.filter((r) => r.strategy.id === s.id);
+  const params = mine[0]?.params ?? {};
+  return h("section", { class: "card theory" },
+    h("div", { class: "name" }, s.name),
+    h("div", { class: "code" }, `${s.code} · version ${s.version}`),
+    s.theory && h("p", {}, s.theory),
+    h("h3", {}, "เข้าเมื่อ"), h("ol", {}, (s.entry_rules ?? []).map((r) => h("li", {}, describe(r, params)))),
+    h("h3", {}, "ออกเมื่อ"), h("ul", {}, (s.exit_rules ?? []).map((r) => h("li", {}, describe(r, params)))),
+    h("h3", {}, "ผลทดสอบ"),
+    mine.length ? mine.map((r) => h("div", { class: "chips", style: "margin-bottom:6px" },
+      h("a", { class: "chip", href: `run.html?id=${r.id}` }, `#${r.id} ${r.symbol} · ${r.timeframe}`),
+      h("span", { class: `chip ${signClass(r.net_profit)}` }, "Net ", h("b", {}, money(r.net_profit))),
+      h("span", { class: "chip" }, "PF ", h("b", {}, num(r.profit_factor))),
+      h("span", { class: "chip" }, "Win ", h("b", {}, pct(r.win_rate))),
+      h("span", { class: "chip" }, "เทรด ", h("b", {}, r.total_trades ?? "–")),
+      h("span", { class: "chip" }, "DD ", h("b", {}, pct(r.max_dd_pct))),
+    )) : h("p", { class: "muted" }, "ยังไม่มีผล"),
+    s.notes && [h("h3", {}, "โน้ต"), h("p", {}, s.notes)],
+  );
+}
+
+function render() {
+  $("#main").replaceChildren(
+    h("div", {},
+      h("h1", {}, "ทฤษฎีกราฟ"),
+      h("p", { class: "muted" }, "ทฤษฎีที่ตัดสินใจจากราคาอย่างเดียว ไม่ใช้อินดิเคเตอร์ — เบรกกรอบ แท่งเทียนกลับตัว ทรงกลับตัว แนวรับแนวต้าน")),
+    h("p", { class: "notice" },
+      "PF (profit factor) มากกว่า 1 = กำไรรวมมากกว่าขาดทุนรวม · ผลนี้คิดสเปรดคงที่และยังไม่รวม slippage · ",
+      "ทฤษฎีที่ดูดีในช่วงเดียวอาจเป็นแค่ความบังเอิญ ต้องทดสอบนอกช่วง (out-of-sample) ก่อนเชื่อ · ",
+      h("a", { href: "daystudy.html" }, "ดูสถิติรายวัน: มาทรงนี้ขึ้นกี่ % ลงกี่ % →")),
+    h("h2", {}, "เทียบผลทุกทฤษฎี"),
+    h("div", { class: "toolbar" },
+      h("label", {}, h("input", { type: "checkbox", checked: showAll, onchange: (e) => { showAll = e.target.checked; render(); } }),
+        ` แสดงทุกรอบ (${runs.length}) — ปกติแสดงเฉพาะรอบล่าสุดของแต่ละทฤษฎี`)),
+    compareTable(),
+    weekdayMatrix(),
+    h("h2", {}, `รายละเอียดทฤษฎี (${strategies.length})`),
+    h("div", { class: "grid two" }, strategies.length ? strategies.map(card) : h("p", { class: "empty" }, "ยังไม่มีทฤษฎีกราฟ")),
+  );
+}
+
+const session = await requireSession();
+if (session) {
+  try {
+    const [{ data: st, error: e1 }, { data: rs, error: e2 }] = await Promise.all([
+      sb.from("strategies").select("*").like("code", `${PREFIX}%`).order("code").order("version", { ascending: false }),
+      sb.from("backtest_runs").select("*, strategy:strategies!inner(id, code, version, name)")
+        .like("strategy.code", `${PREFIX}%`).order("created_at", { ascending: false }).limit(2000),
+    ]);
+    if (e1 || e2) throw e1 ?? e2;
+    strategies = st;
+    runs = rs;
+    render();
+    loadWeekdays();
+  } catch (e) { $("#main").replaceChildren(); showError(e); }
+}
+</script>
+</body>
+</html>

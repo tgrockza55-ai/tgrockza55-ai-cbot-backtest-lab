@@ -10,7 +10,8 @@
 <main class="stack" id="main"><p class="muted">กำลังโหลด…</p></main>
 <script type="module">
 import Chart from "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/auto/+esm";
-import { sb, requireSession, labApi, h, $, money, pct, num, date, dateTime, signClass, describe, showError } from "./app.js";
+import { sb, requireSession, labApi, h, $, money, pct, num, date, dateTime, signClass, describe, showError,
+  WEEKDAYS, tradeWeekday, tradeStats, weekdayStats, splitBar } from "./app.js";
 
 const id = Number(new URLSearchParams(location.search).get("id"));
 const stat = (label, value, cls = "") => h("div", { class: "stat" }, h("div", { class: "label" }, label), h("div", { class: `value ${cls}` }, value));
@@ -102,6 +103,110 @@ function equityChart(canvas, points, startBalance) {
   });
 }
 
+// ---------- แยกตามวันในสัปดาห์ ----------
+function weekdayTable(trades) {
+  const head = ["วัน", "เทรด", "ชนะ", "แพ้", "สัดส่วน", "PF", "Net", "เฉลี่ยไม้ชนะ", "เฉลี่ยไม้แพ้", "ถือเฉลี่ย (นาที)", ""];
+  const row = (label, s, cls = "") => h("tr", { class: cls || (s.n < 30 ? "weak" : "") },
+    h("td", {}, label),
+    h("td", { class: "num" }, s.n),
+    h("td", { class: "num" }, pct(s.winPct)),
+    h("td", { class: "num" }, pct(s.lossPct)),
+    h("td", {}, splitBar(s.winPct, s.lossPct)),
+    h("td", { class: "num" }, num(s.pf)),
+    h("td", { class: `num ${signClass(s.net)}` }, money(s.net)),
+    h("td", { class: "num" }, money(s.avgWin)),
+    h("td", { class: "num" }, money(s.avgLoss)),
+    h("td", { class: "num" }, s.avgMinutes == null ? "–" : Math.round(s.avgMinutes)),
+    h("td", {}, s.n > 0 && s.n < 30 ? h("span", { class: "tag" }, "ตัวอย่างน้อย (< 30)") : ""),
+  );
+  return h("section", { class: "stack" },
+    h("h2", {}, "ผลแยกตามวันในสัปดาห์"),
+    h("p", { class: "muted" }, "นับตามวันที่เข้าเทรด (เวลา UTC) · PF มากกว่า 1 = วันนั้นกำไรรวมมากกว่าขาดทุนรวม · win rate สูงไม่ได้แปลว่ากำไร ต้องดูคู่กับขนาดไม้ชนะ/ไม้แพ้"),
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, head.map((t, i) => h("th", { class: i > 0 && i !== 4 && i !== 10 ? "num" : null }, t)))),
+      h("tbody", {}, weekdayStats(trades).map((s, i) => row(WEEKDAYS[i], s)), row("รวมทุกวัน", tradeStats(trades), "group")),
+    )));
+}
+
+// ---------- ตัวอย่างกราฟ: ทรงที่ทำให้เกิดสัญญาณ แล้วราคาไปต่อยังไง ----------
+const SVG = "http://www.w3.org/2000/svg";
+const s = (tag, attrs = {}, ...kids) => {
+  const el = document.createElementNS(SVG, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  el.append(...kids);
+  return el;
+};
+const hhmm = (unix) => new Date(unix * 1000).toISOString().slice(11, 16);
+
+function candleChart(t) {
+  const W = 560, H = 250, L = 8, R = 58, T = 10, B = 20;
+  const bars = t.bars, n = bars.length;
+  const entryUnix = Date.parse(t.entryTime) / 1000, exitUnix = Date.parse(t.exitTime) / 1000;
+  const indexAt = (unix) => { let i = 0; while (i + 1 < n && bars[i + 1][0] <= unix) i++; return i; };
+  const ei = indexAt(entryUnix), xi = indexAt(exitUnix), exitShown = bars[n - 1][0] + 60 > exitUnix;
+
+  const prices = bars.flatMap((b) => [b[2], b[3]]).concat([t.sl, t.tp].filter((v) => v != null));
+  const lo = Math.min(...prices), hi = Math.max(...prices), span = hi - lo || 1;
+  const step = (W - L - R) / n, bw = Math.max(1, step * 0.64);
+  const x = (i) => L + step * (i + 0.5), y = (p) => T + (1 - (p - lo) / span) * (H - T - B);
+
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img",
+    "aria-label": `กราฟแท่งเทียนรอบเทรด #${t.id} ${t.side} ผล ${t.net}` });
+  bars.forEach((b, i) => {
+    const up = b[4] >= b[1], top = y(Math.max(b[1], b[4])), bottom = y(Math.min(b[1], b[4]));
+    svg.append(s("g", { class: up ? "cu" : "cd" },
+      s("title", {}, `${hhmm(b[0])} UTC  O ${b[1]}  H ${b[2]}  L ${b[3]}  C ${b[4]}`),
+      s("line", { x1: x(i), x2: x(i), y1: y(b[2]), y2: y(b[3]), "stroke-width": 1 }),
+      s("rect", { x: x(i) - bw / 2, y: top, width: bw, height: Math.max(1, bottom - top), "stroke-width": 0 })));
+  });
+
+  const level = (price, label, color) => price != null && svg.append(
+    s("line", { class: "lvl", x1: x(ei), x2: x(exitShown ? xi : n - 1), y1: y(price), y2: y(price), stroke: color }),
+    s("text", { x: W - R + 6, y: y(price) + 4 }, `${label} ${price}`));
+  level(t.tp, "TP", "var(--pos)");
+  level(t.sl, "SL", "var(--neg)");
+
+  svg.append(
+    s("line", { class: "entry", x1: x(ei), x2: x(ei), y1: T, y2: H - B }),
+    s("text", { x: x(ei), y: H - 6, "text-anchor": "middle" }, `เข้า ${hhmm(entryUnix)}`));
+  if (exitShown) svg.append(
+    s("line", { class: "path", x1: x(ei), y1: y(t.entryPrice), x2: x(xi), y2: y(t.exitPrice) }),
+    s("circle", { class: "dot", cx: x(xi), cy: y(t.exitPrice), r: 4 }, s("title", {}, `ออก ${hhmm(exitUnix)} UTC ที่ ${t.exitPrice}`)));
+  svg.append(s("circle", { class: "dot", cx: x(ei), cy: y(t.entryPrice), r: 4 }, s("title", {}, `เข้า ${t.side} ที่ ${t.entryPrice}`)));
+  return svg;
+}
+
+function examples(trades) {
+  const list = trades.filter((t) => Array.isArray(t.bars) && t.bars.length > 1);
+  if (!list.length) return "";
+  let wd = -1, outcome = "";
+  const grid = h("div", { class: "examples" });
+  const draw = () => {
+    const shown = list.filter((t) => (wd < 0 || tradeWeekday(t) === wd) && (!outcome || (outcome === "win") === (t.net > 0)));
+    grid.replaceChildren(...(shown.length ? shown.map((t) => {
+      const minutes = Math.round((Date.parse(t.exitTime) - Date.parse(t.entryTime)) / 60000);
+      return h("figure", { class: "card example", style: "margin:0" },
+        h("figcaption", {},
+          h("b", {}, `${WEEKDAYS[tradeWeekday(t)]} ${dateTime(t.entryTime)}`), ` · ${t.side} · `,
+          h("span", { class: signClass(t.net) }, `${t.net > 0 ? "ชนะ" : "แพ้"} ${money(t.net)} (${num(t.pips)} pips)`),
+          h("span", { class: "muted" }, ` · ถือ ${minutes} นาที · #${t.id}`)),
+        candleChart(t));
+    }) : [h("p", { class: "empty" }, "ไม่มีตัวอย่างที่ตรงเงื่อนไข")]));
+  };
+  const tabs = h("div", { class: "tabs", role: "group", "aria-label": "เลือกวัน" });
+  const tab = (label, i) => h("button", { "aria-pressed": String(wd === i), onclick: () => { wd = i; paint(); } }, label);
+  const sel = h("select", { "aria-label": "กรองผล", oninput: (e) => { outcome = e.target.value; draw(); } },
+    h("option", { value: "" }, "ทั้งชนะและแพ้"), h("option", { value: "win" }, "เฉพาะที่ชนะ"), h("option", { value: "loss" }, "เฉพาะที่แพ้"));
+  const paint = () => { tabs.replaceChildren(tab("ทุกวัน", -1), ...WEEKDAYS.map(tab), sel); draw(); };
+  paint();
+  return h("section", { class: "stack" },
+    h("h2", {}, `ตัวอย่างกราฟตอนเกิดสัญญาณ (${list.length})`),
+    h("p", { class: "muted" },
+      "แท่งทางซ้ายของเส้นประแนวตั้ง = ทรงที่ทำให้เกิดสัญญาณ · ทางขวา = สิ่งที่เกิดขึ้นหลังเข้า · เส้นประเขียว/แดง = TP/SL · วงกลม = จุดเข้าและจุดออก · ",
+      "ตัวอย่างถูกเลือกแบบกระจายตามช่วงเวลา (ชนะ 2 แพ้ 2 ต่อวัน) ไม่ได้คัดเฉพาะอันที่สวย"),
+    tabs, grid);
+}
+
 function tradesTable(trades) {
   const shown = trades.slice(-1000);
   return h("section", { class: "stack" },
@@ -160,7 +265,8 @@ if (session) {
     } else {
       const file = await labApi(`/runs/${run.id}/file`);
       equityChart(canvas, file.equity ?? [], run.start_balance);
-      fileArea.replaceChildren(tradesTable(file.trades ?? []));
+      const trades = file.trades ?? [];
+      fileArea.replaceChildren(weekdayTable(trades), examples(trades), tradesTable(trades));
     }
   } catch (e) { if (e) showError(e); }
 }

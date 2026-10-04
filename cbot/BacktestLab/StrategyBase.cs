@@ -57,6 +57,20 @@ namespace cAlgo.Robots
         /// <summary>เงื่อนไขออกเพิ่มเติมนอกจาก SL/TP และสัญญาณตรงข้าม</summary>
         public virtual bool ShouldExit(Position position) => false;
 
+        /// <summary>
+        /// ทฤษฎีกราฟ: วาง SL ตามโครงสร้างราคา — คืนระยะจากราคาเข้าถึง SL (หน่วยราคา) ของสัญญาณล่าสุด
+        /// null = ใช้ Stop loss / Take profit (pips) ของ robot ตามเดิม
+        /// robot จะบีบระยะให้อยู่ใน Min/Max stop (% ของราคา) แล้วตั้ง TP = ระยะ SL × RewardRisk
+        /// </summary>
+        public virtual double? StopDistance(TradeType side) => null;
+        public virtual double RewardRisk => 2;
+
+        /// <summary>true = เครื่องมือ (เช่นส่งออกข้อมูล) ไม่ใช่ทฤษฎี — ไม่ส่งผลขึ้น lab</summary>
+        public virtual bool IsUtility => false;
+
+        /// <summary>เรียกตอน cBot หยุด (ปิดไฟล์ ฯลฯ)</summary>
+        public virtual void OnStop() { }
+
         public Dictionary<string, object> NamedParams()
         {
             var d = new Dictionary<string, object>();
@@ -83,6 +97,52 @@ namespace cAlgo.Robots
             if (found == null)
                 throw new ArgumentException("Unknown strategy code '" + code + "'. Available: " + string.Join(", ", all.Select(s => s.Code)));
             return found;
+        }
+
+        // ---- helper สำหรับทฤษฎีกราฟ: i = จำนวนแท่งย้อนหลัง (1 = แท่งล่าสุดที่ปิดแล้ว) ----
+        protected double O(int i) => Bot.Bars.OpenPrices.Last(i);
+        protected double H(int i) => Bot.Bars.HighPrices.Last(i);
+        protected double L(int i) => Bot.Bars.LowPrices.Last(i);
+        protected double C(int i) => Bot.Bars.ClosePrices.Last(i);
+        protected double Body(int i) => Math.Abs(C(i) - O(i));
+        protected double Range(int i) => H(i) - L(i);
+        protected bool HasBars(int n) => Bot.Bars.Count > n + 2;
+
+        /// <summary>เรียกใน OnInit: P ตัวไหน ≤ 0 ให้ใช้ค่าเริ่มต้นของทฤษฎี (ผลที่ส่งขึ้น lab จะเห็นค่าที่ใช้จริง)</summary>
+        protected void Defaults(params double[] values)
+        {
+            for (int i = 0; i < values.Length && i < P.Length; i++)
+                if (P[i] <= 0) P[i] = values[i];
+        }
+
+        /// <summary>วันเทรด (UTC): แท่งคืนวันอาทิตย์นับเป็นวันจันทร์</summary>
+        protected static DateTime TradingDay(DateTime t) =>
+            t.DayOfWeek == DayOfWeek.Sunday ? t.Date.AddDays(1) : t.Date;
+
+        /// <summary>เวลาเปิด (UTC) ของแท่งล่าสุดที่ปิดแล้ว</summary>
+        protected DateTime BarTime => Bot.Bars.OpenTimes.Last(1);
+
+        /// <summary>High สูงสุดของ count แท่ง เริ่มจากแท่งที่ from (ย้อนหลัง)</summary>
+        protected double HighestHigh(int from, int count)
+        {
+            var v = double.MinValue;
+            for (int i = from; i < from + count; i++) v = Math.Max(v, H(i));
+            return v;
+        }
+
+        protected double LowestLow(int from, int count)
+        {
+            var v = double.MaxValue;
+            for (int i = from; i < from + count; i++) v = Math.Min(v, L(i));
+            return v;
+        }
+
+        /// <summary>ค่าเฉลี่ยความยาวแท่ง (High-Low) ของ count แท่ง เริ่มจากแท่งที่ from</summary>
+        protected double AvgRange(int from, int count)
+        {
+            double s = 0;
+            for (int i = from; i < from + count; i++) s += Range(i);
+            return s / count;
         }
 
         // ---- helper สำหรับทฤษฎี ----

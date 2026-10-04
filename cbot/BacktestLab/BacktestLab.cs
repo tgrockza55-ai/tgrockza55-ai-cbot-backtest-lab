@@ -38,6 +38,13 @@ namespace cAlgo.Robots
         [Parameter("Take profit (pips, 0 = none)", DefaultValue = 40, MinValue = 0, Group = "Risk")]
         public double TakeProfitPips { get; set; }
 
+        // ใช้กับทฤษฎีที่วาง SL ตามโครงสร้างราคา (StopDistance) — เป็น % ของราคา จึงเทียบกันได้ทุกช่วงราคา
+        [Parameter("Min stop (% of price)", DefaultValue = 0.05, MinValue = 0, Group = "Risk")]
+        public double MinStopPct { get; set; }
+
+        [Parameter("Max stop (% of price)", DefaultValue = 0.5, MinValue = 0, Group = "Risk")]
+        public double MaxStopPct { get; set; }
+
         [Parameter("Send results", DefaultValue = true, Group = "Report")]
         public bool SendResults { get; set; }
 
@@ -53,6 +60,13 @@ namespace cAlgo.Robots
         private EquityRecorder _equity;
         private DateTime _startTime;
         private double _startBalance;
+        private bool _structureStops;
+        // ราคา SL / TP ตอนเปิดของแต่ละ position (History ไม่เก็บไว้ให้)
+        private readonly Dictionary<int, double?[]> _stops = new Dictionary<int, double?[]>();
+
+        // เทรดตัวอย่างที่แนบแท่งราคาไปให้หน้าเว็บวาดกราฟ: ต่อวันในสัปดาห์ เอาชนะ/แพ้อย่างละเท่านี้
+        private const int ExamplesPerGroup = 2;
+        private const int ExampleBarsBefore = 60, ExampleBarsAfter = 20, ExampleMaxBars = 300;
 
         protected override void OnStart()
         {
@@ -93,15 +107,29 @@ namespace cAlgo.Robots
             var volume = Symbol.NormalizeVolumeInUnits(Symbol.QuantityToVolumeInUnits(Lots));
             double? sl = StopLossPips > 0 ? StopLossPips : (double?)null;
             double? tp = TakeProfitPips > 0 ? TakeProfitPips : (double?)null;
-            ExecuteMarketOrder(signal.Value, SymbolName, volume, Label, sl, tp);
+
+            var distance = _strategy.StopDistance(signal.Value);
+            if (distance.HasValue)
+            {
+                var price = Symbol.Bid;
+                var d = Math.Max(distance.Value, price * MinStopPct / 100);
+                if (MaxStopPct > 0) d = Math.Min(d, price * MaxStopPct / 100);
+                sl = Math.Round(d / Symbol.PipSize, 1);
+                tp = Math.Round(sl.Value * _strategy.RewardRisk, 1);
+                _structureStops = true;
+            }
+            var result = ExecuteMarketOrder(signal.Value, SymbolName, volume, Label, sl, tp);
+            if (result.IsSuccessful && result.Position != null)
+                _stops[result.Position.Id] = new[] { result.Position.StopLoss, result.Position.TakeProfit };
         }
 
         protected override void OnStop()
         {
             if (_equity == null) return;
             _equity.Add(Server.Time, Account.Equity, force: true);
+            _strategy.OnStop();
 
-            if (RunningMode == RunningMode.RealTime || !SendResults) return;
+            if (RunningMode == RunningMode.RealTime || !SendResults || _strategy.IsUtility) return;
 
             var openCount = Positions.FindAll(Label, SymbolName).Length;
             if (openCount > 0) Print("Note: {0} position(s) still open at the end are not counted as trades.", openCount);
@@ -121,12 +149,18 @@ namespace cAlgo.Robots
             var grossLoss = trades.Where(t => t.NetProfit < 0).Sum(t => t.NetProfit);
             var netProfit = trades.Sum(t => t.NetProfit);
 
-            var parameters = new Dictionary<string, object>(_strategy.NamedParams())
+            var parameters = new Dictionary<string, object>(_strategy.NamedParams()) { ["Lots"] = Lots };
+            if (_structureStops)
             {
-                ["Lots"] = Lots,
-                ["StopLossPips"] = StopLossPips,
-                ["TakeProfitPips"] = TakeProfitPips,
-            };
+                parameters["MinStopPct"] = MinStopPct;
+                parameters["MaxStopPct"] = MaxStopPct;
+                parameters["RewardRisk"] = _strategy.RewardRisk;
+            }
+            else
+            {
+                parameters["StopLossPips"] = StopLossPips;
+                parameters["TakeProfitPips"] = TakeProfitPips;
+            }
 
             return new
             {
@@ -158,23 +192,77 @@ namespace cAlgo.Robots
                     machine = Environment.MachineName,
                     note = string.IsNullOrWhiteSpace(RunNote) ? null : RunNote,
                 },
-                trades = trades.Select(t => new
-                {
-                    id = t.PositionId,
-                    side = t.TradeType.ToString(),
-                    entryTime = Iso(t.EntryTime),
-                    exitTime = Iso(t.ClosingTime),
-                    entryPrice = t.EntryPrice,
-                    exitPrice = t.ClosingPrice,
-                    volume = t.VolumeInUnits,
-                    pips = Round(t.Pips),
-                    gross = Round(t.GrossProfit),
-                    commissions = Round(t.Commissions),
-                    swap = Round(t.Swap),
-                    net = Round(t.NetProfit),
-                }).ToList(),
+                trades = TradeRows(trades),
                 equity = _equity.Points,   // [[unixSeconds, equity], ...]
             };
+        }
+
+        private List<Dictionary<string, object>> TradeRows(List<HistoricalTrade> trades)
+        {
+            var examples = PickExamples(trades);
+            var rows = new List<Dictionary<string, object>>(trades.Count);
+            foreach (var t in trades)
+            {
+                var row = new Dictionary<string, object>
+                {
+                    ["id"] = t.PositionId,
+                    ["side"] = t.TradeType.ToString(),
+                    ["entryTime"] = Iso(t.EntryTime),
+                    ["exitTime"] = Iso(t.ClosingTime),
+                    ["entryPrice"] = t.EntryPrice,
+                    ["exitPrice"] = t.ClosingPrice,
+                    ["volume"] = t.VolumeInUnits,
+                    ["pips"] = Round(t.Pips),
+                    ["gross"] = Round(t.GrossProfit),
+                    ["commissions"] = Round(t.Commissions),
+                    ["swap"] = Round(t.Swap),
+                    ["net"] = Round(t.NetProfit),
+                };
+                double?[] stops;
+                if (_stops.TryGetValue(t.PositionId, out stops))
+                {
+                    if (stops[0].HasValue) row["sl"] = stops[0].Value;
+                    if (stops[1].HasValue) row["tp"] = stops[1].Value;
+                }
+                if (examples.Contains(t.PositionId))
+                {
+                    var bars = ExampleBars(t);
+                    if (bars != null) row["bars"] = bars;   // [[unixSeconds, open, high, low, close], ...]
+                }
+                rows.Add(row);
+            }
+            return rows;
+        }
+
+        /// <summary>เลือกเทรดตัวอย่าง: ต่อวันในสัปดาห์ (ตามเวลาเข้า UTC) × ชนะ/แพ้ เอาที่กระจายตามช่วงเวลา ไม่ใช่ตัวที่ดีสุด</summary>
+        private HashSet<int> PickExamples(List<HistoricalTrade> trades)
+        {
+            var picked = new HashSet<int>();
+            foreach (var group in trades.Where(t => t.NetProfit != 0)
+                         .GroupBy(t => new { t.EntryTime.DayOfWeek, Win = t.NetProfit > 0 }))
+            {
+                var list = group.ToList();
+                for (int i = 1; i <= ExamplesPerGroup; i++)
+                    picked.Add(list[Math.Min(list.Count - 1, list.Count * i / (ExamplesPerGroup + 1))].PositionId);
+            }
+            return picked;
+        }
+
+        private List<double[]> ExampleBars(HistoricalTrade t)
+        {
+            var entry = Bars.OpenTimes.GetIndexByTime(t.EntryTime);
+            var exit = Bars.OpenTimes.GetIndexByTime(t.ClosingTime);
+            if (entry < 0 || exit < 0) return null;
+
+            var from = Math.Max(0, entry - ExampleBarsBefore);
+            var to = Math.Min(Bars.Count - 1, Math.Min(exit + ExampleBarsAfter, from + ExampleMaxBars - 1));
+            var rows = new List<double[]>(to - from + 1);
+            for (int i = from; i <= to; i++)
+            {
+                var unix = new DateTimeOffset(DateTime.SpecifyKind(Bars.OpenTimes[i], DateTimeKind.Utc)).ToUnixTimeSeconds();
+                rows.Add(new[] { unix, Bars.OpenPrices[i], Bars.HighPrices[i], Bars.LowPrices[i], Bars.ClosePrices[i] });
+            }
+            return rows;
         }
 
         // InvariantCulture: เครื่องที่ตั้งภาษาไทยจะได้ปี พ.ศ. ถ้าไม่ระบุ

@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Backtest Lab · สถิติรายวัน</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="stack" id="main"><p class="muted">กำลังโหลด…</p></main>
+<script type="module">
+import { requireSession, h, $, showError } from "./app.js";
+
+const SYMBOL = new URLSearchParams(location.search).get("symbol") ?? "XAUUSD";
+const WEEKDAYS = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์"];
+const ASIA = { U: "ช่วงเช้าขึ้น", D: "ช่วงเช้าลง", S: "ช่วงเช้าออกข้าง" };
+const PREV = { G: "วันก่อนเขียวยาว", R: "วันก่อนแดงยาว", N: "วันก่อนลังเล (โดจิ/ไส้ยาว)" };
+
+const SVG = "http://www.w3.org/2000/svg";
+const s = (tag, attrs = {}, ...kids) => {
+  const el = document.createElementNS(SVG, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  el.append(...kids);
+  return el;
+};
+const p1 = (v) => (v == null ? "–" : `${v.toFixed(1)}%`);
+const p2 = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`);
+const sign = (v) => (v == null ? "" : v > 0 ? "pos" : v < 0 ? "neg" : "");
+const thaiDate = (iso) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("th-TH", { year: "2-digit", month: "short", day: "numeric", timeZone: "UTC" });
+
+let data, weekday = 0, fAsia = "", fPrev = "";
+
+const stat = (label, value, cls = "") => h("div", { class: "stat" }, h("div", { class: "label" }, label), h("div", { class: `value ${cls}` }, value));
+
+/** แถบแบ่งสัดส่วน ขึ้น / ลง (ตัวเลขอยู่ในคอลัมน์ข้างๆ เสมอ) */
+function split(c) {
+  if (c.upPct == null) return "";
+  return h("div", { class: "split", role: "img", "aria-label": `ขึ้น ${p1(c.upPct)} ลง ${p1(c.downPct)}`, title: `ขึ้น ${c.up} วัน · ลง ${c.down} วัน` },
+    h("span", { class: "up", style: `width:${c.upPct}%` }), h("span", { class: "down", style: `width:${c.downPct}%` }));
+}
+
+function shapeRow(label, c, pick) {
+  return h("tr", { class: [c.reliable ? "" : "weak", pick && "link"].filter(Boolean).join(" "), onclick: pick, tabindex: pick ? 0 : null,
+    onkeydown: pick ? (e) => e.key === "Enter" && pick() : null },
+    h("td", {}, label),
+    h("td", { class: "num" }, c.n),
+    h("td", { class: "num" }, p1(c.upPct)),
+    h("td", { class: "num" }, p1(c.downPct)),
+    h("td", {}, split(c)),
+    h("td", { class: "num" }, c.ci95?.[0] == null ? "–" : `${c.ci95[0].toFixed(0)}–${c.ci95[1].toFixed(0)}%`),
+    h("td", { class: "num" }, p2(c.avgUpPct)),
+    h("td", { class: "num" }, p2(c.avgDownPct)),
+    ...c.periods.map((p) => h("td", { class: "num", title: `${p.n} วัน` }, p.n ? p1(p.upPct) : "–")),
+    h("td", {}, c.reliable ? "" : h("span", { class: "tag" }, `ตัวอย่างน้อย (< ${data.reliableN})`)),
+  );
+}
+
+function shapeTable(g) {
+  const head = ["ทรง", "จำนวนวัน", "ขึ้น", "ลง", "สัดส่วน", "ช่วงเชื่อมั่น 95% (ขึ้น)", "เฉลี่ยวันที่ขึ้น", "เฉลี่ยวันที่ลง",
+    ...data.periods.map((p) => `ขึ้น ${p}`), ""];
+  const group = (t) => h("tr", { class: "group" }, h("td", { colspan: head.length }, t));
+  const pick = (a, p) => () => { fAsia = a; fPrev = p; render(); $("#days").scrollIntoView({ behavior: "smooth" }); };
+  return h("div", { class: "table-wrap" }, h("table", {},
+    h("thead", {}, h("tr", {}, head.map((t, i) => h("th", { class: i > 0 && i !== 4 ? "num" : null }, t)))),
+    h("tbody", {},
+      shapeRow("ทุกทรง", g.all, pick("", "")),
+      group("ดูจากทรงช่วงเช้า (ช่วงเอเชีย)"),
+      Object.entries(ASIA).map(([k, label]) => shapeRow(label, g.asia[k], pick(k, ""))),
+      group("ดูจากแท่งเทียนของวันก่อน"),
+      Object.entries(PREV).map(([k, label]) => shapeRow(label, g.prev[k], pick("", k))),
+      group("สองอย่างรวมกัน"),
+      Object.entries(PREV).flatMap(([pk, pl]) => Object.entries(ASIA).map(([ak, al]) =>
+        shapeRow(`${pl.replace(" (โดจิ/ไส้ยาว)", "")} + ${al}`, g.combo[pk + ak], pick(ak, pk)))),
+    )));
+}
+
+/** เส้นราคาทั้งวัน (% จากราคาเปิด รายชั่วโมง UTC) เส้นประ = จุดแบ่งช่วงเช้า/ช่วงที่เหลือ */
+function spark(row) {
+  const W = 168, H = 36, pad = 3;
+  const pts = row.path.map((v, i) => [i, v]).filter(([, v]) => v != null);
+  if (pts.length < 2) return "";
+  const vals = pts.map(([, v]) => v);
+  const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals), span = hi - lo || 1;
+  const x = (i) => pad + (i / 23) * (W - 2 * pad), y = (v) => pad + (1 - (v - lo) / span) * (H - 2 * pad);
+  return s("svg", { class: "spark", viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `ทั้งวัน ${p2(row.dayPct)}` },
+    s("title", {}, `${thaiDate(row.date)} · ต่ำสุด ${p2(Math.min(...vals))} สูงสุด ${p2(Math.max(...vals))} (เทียบราคาเปิด)`),
+    s("line", { class: "zero", x1: pad, x2: W - pad, y1: y(0), y2: y(0) }),
+    s("line", { class: "mark", x1: x(data.asiaEndHourUtc), x2: x(data.asiaEndHourUtc), y1: 0, y2: H }),
+    s("polyline", { class: "line", points: pts.map(([i, v]) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ") }));
+}
+
+function daysTable() {
+  const rows = data.rows
+    .filter((r) => weekday < 0 || r.wd === weekday)
+    .filter((r) => !fAsia || r.asia === fAsia)
+    .filter((r) => !fPrev || r.prev === fPrev)
+    .reverse();
+  const select = (value, options, all, set) => {
+    const el = h("select", { "aria-label": all, oninput: (e) => { set(e.target.value); render(); } },
+      h("option", { value: "" }, all), Object.entries(options).map(([k, v]) => h("option", { value: k }, v)));
+    el.value = value;
+    return el;
+  };
+  return h("section", { class: "stack", id: "days" },
+    h("h2", {}, `แต่ละวันเป็นยังไง (${rows.length} วัน)`),
+    h("div", { class: "toolbar" },
+      select(fAsia, ASIA, "ทุกทรงช่วงเช้า", (v) => fAsia = v),
+      select(fPrev, PREV, "ทุกแบบของวันก่อน", (v) => fPrev = v),
+      h("span", { class: "count" }, "กราฟเล็ก = ราคาทั้งวันเทียบราคาเปิด · เส้นประ = จบช่วงเช้า")),
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, ["วันที่", "วัน", "วันก่อน", "ทรงช่วงเช้า", "ช่วงเช้า", "ช่วงที่เหลือ", "ผล", "ทั้งวัน", "กรอบวัน", "กราฟทั้งวัน"].map((t, i) =>
+        h("th", { class: [4, 5, 7, 8].includes(i) ? "num" : null }, t)))),
+      h("tbody", {}, rows.length ? rows.map((r) => h("tr", {},
+        h("td", { class: "mono" }, thaiDate(r.date)),
+        h("td", {}, WEEKDAYS[r.wd]),
+        h("td", {}, r.prev ? PREV[r.prev].replace("วันก่อน", "").replace(" (โดจิ/ไส้ยาว)", "") : "–"),
+        h("td", {}, ASIA[r.asia].replace("ช่วงเช้า", "")),
+        h("td", { class: `num ${sign(r.asiaPct)}` }, p2(r.asiaPct)),
+        h("td", { class: `num ${sign(r.restPct)}` }, p2(r.restPct)),
+        h("td", {}, r.restPct > 0 ? "ขึ้น" : r.restPct < 0 ? "ลง" : "เท่าเดิม"),
+        h("td", { class: `num ${sign(r.dayPct)}` }, p2(r.dayPct)),
+        h("td", { class: "num" }, `${r.rangePct.toFixed(2)}%`),
+        h("td", {}, spark(r)),
+      )) : h("tr", {}, h("td", { colspan: 10, class: "empty" }, "ไม่มีวันที่ตรงเงื่อนไข"))),
+    )));
+}
+
+function render() {
+  const g = weekday < 0 ? data.overall : data.weekdays[weekday];
+  const end = data.asiaEndHourUtc, thai = (hr) => `${String((hr + 7) % 24).padStart(2, "0")}:00`;
+  const tab = (label, i) => h("button", { "aria-pressed": String(weekday === i), onclick: () => { weekday = i; fAsia = fPrev = ""; render(); } }, label);
+
+  $("#main").replaceChildren(
+    h("div", {},
+      h("h1", {}, `สถิติรายวัน · ${data.symbol}`),
+      h("p", { class: "muted" }, `จากแท่ง M1 จริง ${thaiDate(data.from)} – ${thaiDate(data.to)} (${data.days} วัน) · "ถ้าเช้ามาทรงนี้ ช่วงที่เหลือของวันขึ้นกี่ % ลงกี่ %"`)),
+    h("div", { class: "tabs", role: "group", "aria-label": "เลือกวัน" }, WEEKDAYS.map(tab), tab("ทุกวัน", -1)),
+    h("div", { class: "stats" },
+      stat("จำนวนวัน", g.all.n),
+      stat("ช่วงที่เหลือปิดขึ้น", p1(g.all.upPct)),
+      stat("ช่วงที่เหลือปิดลง", p1(g.all.downPct)),
+      stat("เฉลี่ยวันที่ขึ้น", p2(g.all.avgUpPct), "pos"),
+      stat("เฉลี่ยวันที่ลง", p2(g.all.avgDownPct), "neg")),
+    h("p", { class: "notice" },
+      `ช่วงเช้า = เปิดวันถึง ${thai(end)} น. เวลาไทย (ช่วงเอเชีย) · ช่วงที่เหลือ = ${thai(end)} น. ถึงปิดวัน (ลอนดอน + นิวยอร์ก) · `,
+      `ผล = ราคาปิดวันเทียบราคา ณ ${thai(end)} น. · กลุ่มที่มีน้อยกว่า ${data.reliableN} วันเชื่อถือได้น้อย และ % ที่ใกล้ 50 แปลว่าไม่มีความได้เปรียบ · `,
+      "สามคอลัมน์ขวาคือ % ขึ้นของแต่ละปี ถ้าตัวเลขแกว่งมาก แปลว่าสถิตินั้นไม่คงเส้นคงวา"),
+    h("div", { class: "legend" },
+      h("span", {}, h("i", { style: "background:var(--pos)" }), "ขึ้น"),
+      h("span", {}, h("i", { style: "background:var(--neg)" }), "ลง"),
+      h("span", {}, "คลิกแถวเพื่อดูวันในกลุ่มนั้น")),
+    shapeTable(g),
+    daysTable(),
+  );
+}
+
+const session = await requireSession();
+if (session) {
+  try {
+    const res = await fetch(`data/daystudy-${encodeURIComponent(SYMBOL)}.json`, { cache: "no-cache" });
+    if (!res.ok) throw new Error(`ยังไม่มีไฟล์สถิติของ ${SYMBOL} — รัน tools\\day-study.ps1 แล้ว push`);
+    data = await res.json();
+    render();
+  } catch (e) { $("#main").replaceChildren(); showError(e); }
+}
+</script>
+</body>
+</html>

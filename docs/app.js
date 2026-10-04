@@ -7,6 +7,8 @@ export const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const PAGES = [
   ["index.html", "ผลทดสอบ"],
   ["strategies.html", "คลังทฤษฎี"],
+  ["chart.html", "ทฤษฎีกราฟ"],
+  ["daystudy.html", "สถิติรายวัน"],
 ];
 
 export const $ = (sel, root = document) => root.querySelector(sel);
@@ -81,6 +83,40 @@ export const signClass = (v) => (v == null ? "" : v > 0 ? "pos" : v < 0 ? "neg" 
 /** แทน {ชื่อพารามิเตอร์} ในกฎด้วยค่าจริงของ run นั้น */
 export const describe = (rule, params = {}) =>
   String(rule).replace(/\{(\w+)\}/g, (m, k) => (k in params ? params[k] : m));
+
+// ---------- สถิติแยกตามวันในสัปดาห์ (ตามเวลาเข้าเทรด UTC; คืนวันอาทิตย์นับเป็นวันจันทร์) ----------
+export const WEEKDAYS = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์"];
+export const tradeWeekday = (t) => {
+  const d = new Date(t.entryTime).getUTCDay();
+  return d === 0 ? 0 : Math.min(d, 5) - 1;
+};
+
+export function tradeStats(trades) {
+  const wins = trades.filter((t) => t.net > 0), losses = trades.filter((t) => t.net < 0);
+  const sum = (xs) => xs.reduce((a, t) => a + t.net, 0);
+  const grossWin = sum(wins), grossLoss = -sum(losses), decided = wins.length + losses.length;
+  const minutes = trades.map((t) => (new Date(t.exitTime) - new Date(t.entryTime)) / 60000);
+  return {
+    n: trades.length, wins: wins.length, losses: losses.length,
+    winPct: decided ? (100 * wins.length) / decided : null,
+    lossPct: decided ? (100 * losses.length) / decided : null,
+    pf: grossLoss > 0 ? grossWin / grossLoss : null,
+    net: trades.length ? grossWin - grossLoss : null,
+    avgWin: wins.length ? grossWin / wins.length : null,
+    avgLoss: losses.length ? -grossLoss / losses.length : null,
+    avgMinutes: minutes.length ? minutes.reduce((a, b) => a + b, 0) / minutes.length : null,
+  };
+}
+
+/** สถิติของแต่ละวัน จันทร์..ศุกร์ */
+export const weekdayStats = (trades) => WEEKDAYS.map((_, i) => tradeStats(trades.filter((t) => tradeWeekday(t) === i)));
+
+/** แถบแบ่งสัดส่วน ชนะ / แพ้ (ตัวเลขต้องแสดงในคอลัมน์ข้างๆ เสมอ) */
+export function splitBar(a, b, labelA = "ชนะ", labelB = "แพ้") {
+  if (a == null) return "";
+  return h("div", { class: "split", role: "img", "aria-label": `${labelA} ${a.toFixed(1)}% ${labelB} ${b.toFixed(1)}%` },
+    h("span", { class: "up", style: `width:${a}%` }), h("span", { class: "down", style: `width:${b}%` }));
+}
 
 export function showError(err) {
   console.error(err);

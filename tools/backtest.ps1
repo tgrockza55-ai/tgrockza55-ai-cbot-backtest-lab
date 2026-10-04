@@ -20,6 +20,9 @@ param(
     [Nullable[double]]$Lots, [Nullable[double]]$StopLossPips, [Nullable[double]]$TakeProfitPips,
     [double]$Balance = 1000,
     [string]$DataMode = "m1",                        # ticks | m1 | open
+    [Nullable[double]]$Spread,                       # pips; with m1/open data the CLI default is 0 (too optimistic)
+    [Nullable[double]]$Commission,                   # per million; CLI default 0
+    [Nullable[double]]$MinStopPct, [Nullable[double]]$MaxStopPct,
     [string]$Note = "",
     [switch]$Build,
     [int]$TimeoutMinutes = 30
@@ -113,7 +116,10 @@ $a = @(
     "--full-access", ('--report-json="{0}.report.json"' -f $base),
     "--StrategyCode=$Strategy"
 )
-$named = [ordered]@{ P1 = $P1; P2 = $P2; P3 = $P3; P4 = $P4; Lots = $Lots; StopLossPips = $StopLossPips; TakeProfitPips = $TakeProfitPips }
+if ($null -ne $Spread) { $a += ("--spread=" + ([double]$Spread).ToString($inv)) }
+if ($null -ne $Commission) { $a += ("--commission=" + ([double]$Commission).ToString($inv)) }
+$named = [ordered]@{ P1 = $P1; P2 = $P2; P3 = $P3; P4 = $P4; Lots = $Lots; StopLossPips = $StopLossPips; TakeProfitPips = $TakeProfitPips
+    MinStopPct = $MinStopPct; MaxStopPct = $MaxStopPct }
 foreach ($k in $named.Keys) {
     if ($null -ne $named[$k]) { $a += ("--{0}={1}" -f $k, ([double]$named[$k]).ToString($inv)) }
 }
@@ -125,7 +131,7 @@ $ok = Invoke-Cli ($a -join " ") $log ($TimeoutMinutes * 60) "] stopped."
 Write-Host ("Finished in {0} s. Log: {1}" -f [int]$sw.Elapsed.TotalSeconds, $log)
 
 $lines = @(Get-Content $log -ErrorAction SilentlyContinue) + @(Get-Content "$log.err" -ErrorAction SilentlyContinue)
-$lines | Where-Object { $_ -match 'Sent to lab|Lab responded|Send failed|Saved for retry|Missing config|config\.json error|Unknown strategy|Crashed|Exception|^Error' } |
+$lines | Where-Object { $_ -match 'Sent to lab|Lab responded|Send failed|Saved for retry|Missing config|config\.json error|Unknown strategy|Crashed|Exception|^Error|Exported ' } |
     ForEach-Object { $_.Replace($ctid, "<ctid>") }
 
 # ctrader-cli prints its own summary as the last JSON object
