@@ -13,7 +13,8 @@
 //         (build: set MSBuildEnableWorkloadResolver=false, then dotnet build -c Release research\Phase1)
 //
 // Limits: bars are bid prices, so there is no historical spread; cost is an assumption:
-//   fixedCost (default 0.15 = raw spread 0.12 + slippage 0.03) + round-trip commission (default 30 USD per million per side, Pepperstone Razor) x price.
+//   fixedCost per round trip, USD per oz (default 0.22 = Pepperstone Razor gold: commission 3.50 USD per lot per side = 0.07,
+//   plus raw spread ~0.12 and slippage ~0.03 — the spread part is not measured yet) + optional commission in USD per million per side x price (default 0).
 // No tick/order-book or news features — those need live logging (Phase 1B).
 
 using System;
@@ -24,7 +25,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-static class Phase1
+static partial class Phase1
 {
     static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
     static readonly int[] Horizons = { 1, 3, 5, 15, 60 };
@@ -108,16 +109,20 @@ static class Phase1
     static int Main(string[] args)
     {
         var docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        var study = args.FirstOrDefault(a => a.StartsWith("study:"))?.Substring(6);          // tier-0 event studies (Studies.cs)
+        var period = args.FirstOrDefault(a => a.StartsWith("period:"))?.Substring(7) ?? "explore";
+        args = args.Where(a => !a.StartsWith("study:") && !a.StartsWith("period:")).ToArray();
         var symbol = args.Length > 1 ? args[1] : "XAUUSD";
         var csv = args.Length > 0 && args[0] != "-" ? args[0] : Path.Combine(docs, "BacktestLab", "data", symbol + "_Minute.csv");
-        FixedCost = args.Length > 2 ? double.Parse(args[2], Inv) : 0.15;
-        CommissionRate = 2 * (args.Length > 3 ? double.Parse(args[3], Inv) : 30) / 1e6;
+        FixedCost = args.Length > 2 ? double.Parse(args[2], Inv) : 0.22;
+        CommissionRate = 2 * (args.Length > 3 ? double.Parse(args[3], Inv) : 0) / 1e6;
         var cost = FixedCost;
         if (!File.Exists(csv)) { Console.Error.WriteLine("not found: " + csv); return 1; }
 
         Load(csv);
         Console.WriteLine($"bars: {T.Length:N0}  {Date(T[0])} .. {Date(T[T.Length - 1])}   cost per trade: {FixedCost} + {CommissionRate * 1e6:N0} per million round trip (= {Cost(0):N3} at {C[0]:N0}, {Cost(T.Length - 1):N3} at {C[T.Length - 1]:N0})");
         HasNews = LoadNews(docs);
+        if (study != null) return RunStudy(study, period);
         BuildFeatures();
         Console.WriteLine($"features: {BaseCount} price/volume" + (HasNews ? $" + {FeatureNames.Length - BaseCount} news/macro ({EvT.Length} scheduled releases, {MacroDay?.Length ?? 0} macro days)" : "  (no news cache: run tools\\news-fetch.ps1)"));
         var eventJson = "";

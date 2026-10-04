@@ -39,6 +39,9 @@ namespace cAlgo.Robots
         /// <summary>เจอสัญญาณตรงข้ามแล้วปิดออเดอร์เดิมไหม</summary>
         public virtual bool ExitOnOppositeSignal => true;
 
+        /// <summary>ถือพร้อมกันได้กี่ไม้ (robot จำกัดไว้ที่ 3 และไม่ให้ 3 ไม้ไปทางเดียวกันทั้งหมด)</summary>
+        public virtual int MaxPositions => 1;
+
         protected Robot Bot { get; private set; }
         protected double[] P { get; private set; }
 

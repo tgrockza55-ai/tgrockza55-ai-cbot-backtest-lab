@@ -115,7 +115,10 @@ namespace cAlgo.Robots
                 foreach (var pos in Positions.FindAll(Label, SymbolName).Where(p => p.TradeType != signal.Value))
                     ClosePosition(pos);
 
-            if (Positions.FindAll(Label, SymbolName).Length > 0) return;
+            // ถือพร้อมกันได้ตามที่ทฤษฎีกำหนด (ปกติ 1) แต่ไม่เกิน 3 ไม้ และ 3 ไม้ต้องไม่ไปทางเดียวกันทั้งหมด
+            var open = Positions.FindAll(Label, SymbolName);
+            if (open.Length >= Math.Min(3, _strategy.MaxPositions)) return;
+            if (open.Length >= 2 && open.All(p => p.TradeType == signal.Value)) return;
 
             var volume = Symbol.NormalizeVolumeInUnits(Symbol.QuantityToVolumeInUnits(Lots));
             double? sl = StopLossPips > 0 ? StopLossPips : (double?)null;
