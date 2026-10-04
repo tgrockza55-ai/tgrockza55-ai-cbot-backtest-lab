@@ -82,8 +82,12 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
 ### ระบบทำนายรายนาที (ตาม `D:\C2\promt claude.txt` ของผู้ใช้ — ทำเป็น Phase)
 
 เป้าหมายของผู้ใช้: cBot ทอง intraday ที่มี positive expectancy หลังหักต้นทุน โดย "NO EDGE = NO TRADE" และห้ามข้าม Phase
-บัญชีเป็น **Pepperstone Razor**: ต้นทุน = สเปรดดิบ + คอมมิชชั่น 30 USD ต่อล้านต่อขา (ไป-กลับ ~0.25 USD/ออนซ์ ที่ทอง 4,100)
-→ backtest ผ่าน CLI ควรใช้ `-Commission 30` คู่กับสเปรดดิบ (ยังไม่ได้วัดจริง สมมติ ~1.2 pips) แทน `-Spread 2 -Commission 0` แบบเดิม
+บัญชีเป็น **Pepperstone Razor**. ค่าธรรมเนียมทองที่ Pepperstone ประกาศ ("Razor Gold", ตรวจ 04/10/2026 จาก pepperstone.com/en/go/trade-gold-on-razor):
+คอมมิชชั่น **3.50 USD ต่อ lot ต่อขา** (1 lot = 100 ออนซ์ → ไป-กลับ 0.07 USD/ออนซ์, คงที่ ไม่ขึ้นกับราคาทอง) + สเปรดดิบ "from 0.08"
+(ค่าเฉลี่ยสเปรดดิบยังไม่ได้วัดจริง; หน้าเก่าปี 2024 ระบุเฉลี่ย 0.18 สมัยไม่มีคอมมิชชั่น) → ต้นทุนรวมโดยประมาณ **~0.20–0.25 USD/ออนซ์ ต่อรอบ**
+- ค่า 30 USD ต่อล้านต่อขาที่เคยใช้ (0.25 USD/ออนซ์ ที่ทอง 4,100 เฉพาะคอมมิชชั่น) เป็นอัตรา FX ไม่ใช่ของทอง — **Phase 1 รอบที่รันด้วยต้นทุน 0.30–0.40 จึงมองแย่เกินจริง** ต้องรันใหม่ด้วยต้นทุนคงที่ ~0.22
+- backtest ผ่าน CLI: `-Spread 2 -Commission 0` (0.20) ที่ใช้กับทฤษฎีกราฟใกล้เคียงของจริงแล้ว
+- ยังไม่ได้ยืนยันกับ Symbol info ของบัญชีผู้ใช้ใน cTrader (CLI/MCP ไม่แสดงค่าคอมมิชชั่น)
 
 - **Phase 1A (เสร็จ 04/10/2026):** `research/Phase1` (C# console) จำลอง "ทำนายทุกนาที → เทียบผลจริง" บนแท่ง M1 2020–09/2026 แบบ walk-forward
   build: `$env:MSBuildEnableWorkloadResolver = "false"; dotnet build -c Release research\Phase1` (SDK 6.0.100 ในเครื่องมีบั๊ก workload และ `dotnet run` ใช้ไม่ได้)
