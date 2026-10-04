@@ -99,8 +99,74 @@ function periodSection(p, run, trades, canvas) {
     h("p", {}, h("a", { href: `run.html?id=${run.id}` }, `ดูรอบ #${run.id}: รายการเทรดและกราฟตัวอย่าง →`)));
 }
 
+// ---------- scalp ทุน 100 ดอลลาร์: กฎ S3d (SCALP_S3D) ----------
+// ผลจำลองเมื่อฝึกโมเดลด้วยการสุ่มลำดับข้อมูล 6 ชุด (research/JOURNAL.md ลูปที่ 7): กำไรสุทธิเป็นดอลลาร์ต่อ 0.01 lot = % ของทุน 100
+// คอลัมน์: ชุด, ปี 2024, 01/2025–02/2026 (ช่วงที่ใช้หากฎ), 03–06/2026, 07–09/2026, 6 เดือนล่าสุด 04–09/2026
+const SCALP_SEEDS = [
+  ["0 (ชุดที่ cBot ใช้)", -17, 180, 22, 34, 25],
+  ["1", -22, 106, 39, 21, -6],
+  ["2", -33, 121, 8, 11, 21],
+  ["3", -39, 166, 55, -8, -31],
+  ["4", -25, 166, 92, 11, 34],
+  ["5", -17, 135, 55, -20, -32],
+];
+
+async function scalpSection() {
+  const { data, error } = await sb.from("backtest_runs")
+    .select("id, date_from, date_to, note, created_at, start_balance, net_profit, win_rate, profit_factor, max_dd_pct, total_trades, strategy:strategies!inner(code)")
+    .eq("strategy.code", "SCALP_S3D").order("created_at", { ascending: false }).limit(200);
+  if (error) throw error;
+  // รอบที่รันด้วยข้อมูล tick เงินต้น 100 — ช่วงวันที่ซ้ำกันเอารอบล่าสุด
+  const seen = new Set();
+  const ticks = data.filter((r) => /tick/i.test(r.note ?? "") && Number(r.start_balance) === 100)
+    .filter((r) => { const k = `${(r.date_from ?? "").slice(0, 10)}|${(r.date_to ?? "").slice(0, 10)}`; if (seen.has(k)) return false; seen.add(k); return true; })
+    .sort((a, b) => (a.date_from ?? "").localeCompare(b.date_from ?? ""));
+  const signed = (v) => h("td", { class: `num ${signClass(v)}` }, `${v > 0 ? "+" : ""}${v}`);
+  const total = ticks.reduce((s, r) => s + Number(r.net_profit ?? 0), 0);
+
+  return h("section", { class: "stack" },
+    h("div", {},
+      h("h1", {}, "Scalp ทุน 100 ดอลลาร์"),
+      h("p", { class: "muted" }, "ทอง XAUUSD · 0.01 lot ต่อไม้ (ทองขยับ 1 ดอลลาร์ = 1% ของทุน) · ช่วงทดสอบ 01/2024 ถึงปัจจุบัน · อัปเดต 04/10/2026")),
+    h("section", { class: "card" },
+      h("h2", {}, "ยังไม่มีหลักฐานว่ากฎ scalp ที่มีอยู่ได้กำไรจริง"),
+      h("p", {}, h("b", {}, "กฎ S3d: "), "โมเดลทำนาย 5 นาทีมั่นใจ ≥ 56% และทิศตรงกับทิศของวัน (รอย่อแล้วเข้าตามทิศของวัน) เฉพาะช่วงลอนดอน เลี่ยงข่าว ถือ 5 นาที มี SL 5 ดอลลาร์"),
+      h("ul", {},
+        h("li", {}, "ปี 2024 ขาดทุนทุกชุด: ตลาดนิ่ง ระยะที่ราคาไปใน 5 นาทีเล็กกว่าต้นทุน"),
+        h("li", {}, "กำไรกระจุกอยู่ที่ 01–03/2026 ซึ่งทองแกว่งแรงผิดปกติ และเป็นช่วงที่ใช้หากฎ"),
+        h("li", {}, "6 เดือนล่าสุด (04–09/2026) เฉลี่ยเกือบเท่าทุน: บวก 3 ชุด ลบ 3 ชุด และระหว่างทางเคยขาดทุนต่อเนื่อง 47–77 ดอลลาร์"),
+        h("li", {}, "ผล +47 ของช่วง 07–09/2026 ที่เคยรายงาน มาจากชุดที่ดีที่สุดของช่วงนั้น จึงเป็นโชคของการสุ่มมากกว่าความสามารถของกฎ")),
+      h("p", {}, "ขั้นต่อไป: เปิด cBot บนบัญชี Demo เพื่อเก็บข้อมูลตลาดจริง (ทุก tick, สเปรด, ความลึกของออเดอร์, ข่าว, ราคาที่ได้จริง) ",
+        "แล้วหากฎใหม่จากข้อมูลนั้น ข้อมูลตั้งแต่ 10/2026 เป็นชุดเดียวที่ยังไม่เคยถูกใช้หากฎ")),
+
+    h("h2", {}, "ผลจำลองของกฎเดียวกัน เมื่อฝึกโมเดล 6 ครั้งด้วยการสุ่มลำดับข้อมูลต่างกัน"),
+    h("p", { class: "muted" }, "กำไรสุทธิหลังต้นทุน 0.22 ดอลลาร์ต่อรอบ หน่วยเป็นดอลลาร์ (= % ของทุน 100) · ถ้ากฎมี edge จริง ทุกชุดควรให้ผลใกล้กัน"),
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, ["ชุด", "ปี 2024", "01/2025–02/2026 (ใช้หากฎ)", "03–06/2026", "07–09/2026", "6 เดือนล่าสุด 04–09/2026"]
+        .map((t, i) => h("th", { class: i ? "num" : null }, t)))),
+      h("tbody", {}, SCALP_SEEDS.map(([name, ...v]) => h("tr", {}, h("td", {}, name), v.map(signed)))))),
+
+    h("h2", {}, "ยืนยันด้วย cTrader ข้อมูล tick (ชุดที่ cBot ใช้)"),
+    h("p", { class: "muted" }, "สเปรดจริงจากข้อมูล tick + คอมมิชชั่น Razor · รันทีละ 3–4 เดือน เงินต้นเริ่ม 100 ใหม่ทุกช่วง · กดแถวเพื่อดูรายการเทรดและกราฟรายไม้"),
+    ticks.length ? h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, ["ช่วง", "เทรด", "Win", "PF", "Net", "Max DD", "รอบ"].map((t, i) => h("th", { class: i ? "num" : null }, t)))),
+      h("tbody", {},
+        ticks.map((r) => h("tr", { class: `link${r.total_trades < 30 ? " weak" : ""}`, tabindex: 0, onclick: () => location.href = `run.html?id=${r.id}` },
+          h("td", {}, `${date(r.date_from)} – ${date(r.date_to)}`),
+          h("td", { class: "num" }, r.total_trades),
+          h("td", { class: "num" }, pct(r.win_rate)),
+          h("td", { class: "num" }, num(r.profit_factor)),
+          h("td", { class: `num ${signClass(r.net_profit)}` }, money(r.net_profit)),
+          h("td", { class: "num" }, pct(r.max_dd_pct)),
+          h("td", { class: "num" }, `#${r.id}`))),
+        h("tr", { class: "group" }, h("td", {}, "รวมทุกช่วงที่รันแล้ว"), h("td", { class: "num" }, ticks.reduce((s, r) => s + (r.total_trades ?? 0), 0)),
+          h("td", {}), h("td", {}), h("td", { class: `num ${signClass(total)}` }, money(total)), h("td", {}), h("td", {})))))
+      : h("p", { class: "empty" }, "ยังไม่มีรอบที่รันด้วยข้อมูล tick"));
+}
+
 async function load() {
   mountJobs();
+  const scalp = await scalpSection();
   const { data: runs, error } = await sb.from("backtest_runs")
     .select("*, strategy:strategies!inner(id, code, version, name, theory)")
     .eq("strategy.code", CODE).order("created_at", { ascending: false }).limit(200);
@@ -110,7 +176,7 @@ async function load() {
   const found = PERIODS.map((p) => ({ p, run: mine.find((r) => (r.date_from ?? "") >= p.from && (r.date_from ?? "") < p.to) })).filter((x) => x.run);
   const main = $("#main"), jobs = $("#main .jobs");
   if (found.length < PERIODS.length) {
-    main.replaceChildren(jobs, h("h1", {}, "สรุป"), h("p", { class: "empty" }, "ยังไม่มีผลทดสอบของทฤษฎีตัวเต็งครบทั้ง 3 ช่วง"));
+    main.replaceChildren(jobs, scalp, h("h1", {}, "สรุป"), h("p", { class: "empty" }, "ยังไม่มีผลทดสอบของทฤษฎีตัวเต็งครบทั้ง 3 ช่วง"));
     return;
   }
   const files = await Promise.all(found.map((x) => labApi(`/runs/${x.run.id}/file`)));
@@ -120,9 +186,10 @@ async function load() {
 
   main.replaceChildren(
     jobs,
+    scalp,
     h("div", {},
-      h("h1", {}, "สรุป: ทฤษฎีที่ดีที่สุดตอนนี้"),
-      h("p", { class: "muted" }, "ทอง XAUUSD · แท่ง M1 จริง · ต้นทุนบัญชี Razor (0.22 ดอลลาร์ต่อออนซ์ต่อรอบ) · เงินต้น 1,000 · 0.01 lot ต่อไม้ · ปิดทุกไม้ก่อนหมดวัน")),
+      h("h1", {}, "ถือข้ามช่วงเวลา (บัญชี 1,000 ดอลลาร์): กฎ R1"),
+      h("p", { class: "muted" }, "ทอง XAUUSD · แท่ง M1 จริง · ช่วงทดสอบเดิม 2020–09/2026 · ต้นทุนบัญชี Razor (0.22 ดอลลาร์ต่อออนซ์ต่อรอบ) · เงินต้น 1,000 · 0.01 lot ต่อไม้ · ปิดทุกไม้ก่อนหมดวัน")),
     h("section", { class: "card" },
       h("h2", {}, allPass ? "กำไรหลังหักต้นทุนครบทั้ง 3 ช่วง — แต่ยังไม่ใช่ข้อพิสูจน์" : "ยังไม่ผ่านครบทั้ง 3 ช่วง"),
       h("p", {}, h("b", {}, found[0].run.strategy.name), ": ", found[0].run.strategy.theory),

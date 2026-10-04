@@ -13,6 +13,7 @@ cbot/BacktestLab/            ซอร์ส cBot (C#, cTrader Automate .NET 6)
   Strategies/DataExport.cs   เครื่องมือ (ไม่ใช่ทฤษฎี): ส่งออกแท่งราคาเป็น CSV ไม่ส่งผลขึ้น lab
   SwingTracker.cs            หาจุดสวิงสูง/ต่ำแบบไม่มี look-ahead ใช้ร่วมกันในทฤษฎีกราฟ
   Reporter.cs                POST ไป /ingest, เก็บ pending เมื่อส่งไม่ได้
+  LiveRecorder.cs            บันทึกตลาดสดตอนรันบน Demo (tick, DOM, สรุปรายนาที, ออเดอร์) — ดูหัวข้อ "รันสดบนบัญชี Demo"
 supabase/schema.sql          ตาราง strategies, backtest_runs, view strategy_stats + RLS
 supabase/migrations/*.sql    ส่วนเพิ่มของ schema (เช่น backtest_jobs) — ผู้ใช้รันใน SQL Editor ทีละไฟล์
 supabase/functions/lab/      Edge Function: /ingest, /progress, /runs, /runs/:id (GET, DELETE), /runs/:id/file, /health
@@ -85,18 +86,41 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
 และ 3 ไม้ต้องไม่ไปทางเดียวกันทั้งหมด (robot บังคับให้แล้ว; ทฤษฎีกำหนด `MaxPositions`) · เปิดปิดกี่ครั้งต่อวันก็ได้
 ผู้ใช้ต้องการให้วนลูป "ตกผลึกทฤษฎี → ทดสอบ → วิเคราะห์ → ตกผลึกใหม่" จนได้กำไรจริง และให้ย่อยการทดสอบให้เร็ว:
 
-- ชั้น 0 (2 วินาที): `research\Phase1\bin\Release\net6.0\Phase1.exe study:<h1..h7|all> [period:explore|validate|holdout|all]` — เพิ่มทฤษฎีใหม่ใน `research\Phase1\Studies.cs`
-- ชั้น 2 (~1 นาที): `tools\backtest.ps1 ... -Spread 2.2 -FlatTime 2045` (สเปรด 2.2 pips = ต้นทุน Razor 0.22)
-- ช่วงข้อมูล: explore 2020–2024 (ลองได้อิสระ), validate 2025–02/2026 และ holdout 03–09/2026 (เปิดดูเฉพาะกฎที่ล็อกแล้ว และจดทุกครั้งใน JOURNAL)
+- ชั้น 0 (2 วินาที): `research\Phase1\bin\Release\net6.0\Phase1.exe study:<h1..h10|s3|s3x|all> [period:<ชื่อช่วง>] [seed:<n>]` — เพิ่มทฤษฎีใหม่ใน `research\Phase1\Studies.cs`
+- ชั้น 2: `tools\backtest.ps1 ... -Commission 8 -FlatTime 2045` — **ข้อมูล tick เป็นค่าเริ่มต้นแล้ว** (ผู้ใช้สั่ง 04/10/2026: ไม่ต้องรันโหมด M1 ซ้ำ)
+  tick มีสเปรดจริงในตัว จึงไม่ใส่ `-Spread`; `-Commission 8` = Razor ทอง 3.50 USD/lot/ขา · **รันทีละไม่เกิน ~4 เดือน** (3 เดือน ≈ 1–10 นาที;
+  14 เดือนค้างและกินแรม 5.5 GB บนเครื่อง 16 GB) เงินต้นจึงเริ่มใหม่ทุกช่วง · โหมด M1 (`-DataMode m1 -Spread 2.2`) ยังใช้ได้เมื่ออยากได้เส้น equity ต่อเนื่องหลายปี
+- **ช่วงข้อมูล (ผู้ใช้กำหนด 04/10/2026): ทดสอบตั้งแต่ 01/2024 ถึงปัจจุบัน** — ไฟล์แท่ง M1 ถูกตัดเหลือ 2023-01.. โดยปี 2023 เป็นข้อมูลฝึกของโมเดลเท่านั้น
+  `period:dev` 2023-01..2026-03 (พัฒนากฎ) → `period:test` 2026-04..2026-09 (ตรวจกฎที่ล็อกแล้ว จดทุกครั้งใน JOURNAL) · `all` = 2024-01.. · `y2024`
+  · ช่วงผันผวนสูงเดิม: `hv-explore` (2025-01..2026-02), `hv-validate` (2026-03..06), `hv-holdout` (2026-07..09) — S3d เปิดดูครบทุกช่วงแล้ว
+  **ข้อมูลที่ยังไม่เคยถูกใช้หากฎมีแค่ตั้งแต่ 10/2026 = สิ่งที่ cBot บันทึกบน Demo**
 - **ทุนจริงของผู้ใช้ = 100 USD และเน้น scalp** (แจ้ง 04/10/2026): 0.01 lot = 1 ออนซ์ → ทองขยับ 1 USD = 1% ของบัญชี; ทุกกฎต้องรายงาน drawdown เป็น USD ต่อออนซ์ (= % ของทุน)
-  งาน scalp ใช้เฉพาะช่วงผันผวนสูง: `period:hv-explore` (2025-01..2026-02), `hv-validate` (2026-03..06), `hv-holdout` (2026-07..09)
-  ตัวเต็ง scalp = **S3d** = ทฤษฎี `SCALP_S3D` ใน cBot (`Strategies\ScalpPullback.cs`): โมเดล 5 นาที ≥ 56% + ทิศเดียวกับวัน + เฉพาะลอนดอน + เลี่ยงข่าว,
-  ถือ 5 นาที, SL 5 USD, ไม่มี TP — รัน: `tools\backtest.ps1 -Strategy SCALP_S3D -Period m1 -Balance 100 -Spread 2.2 -P1 0.56 -P2 5 -P3 5 -P4 1`
-  - โมเดลอยู่นอก repo: `Phase1.exe export` → `Documents\BacktestLab\model\XAUUSD-5m.json` (ต้องสร้างใหม่ทุกเดือนหลังอัปเดตไฟล์แท่ง M1; ต้องมี `data\news\events.csv` ด้วย)
+- กฎ scalp ที่มีใน cBot = **S3d** = `SCALP_S3D` (`Strategies\ScalpPullback.cs`): โมเดล 5 นาที ≥ 56% + ทิศเดียวกับวัน + เฉพาะลอนดอน + เลี่ยงข่าว, ถือ 5 นาที, SL 5 USD, ไม่มี TP
+  รัน: `tools\backtest.ps1 -Strategy SCALP_S3D -Symbol XAUUSD -Period m1 -Balance 100 -Commission 8 -P1 0.56 -P2 5 -P3 5 -P4 1`
+  - **สถานะจริง (JOURNAL ลูปที่ 7): ยังไม่มีหลักฐานว่ามี edge** — ปี 2024 ขาดทุน, กำไรกระจุกที่ 01–03/2026, และ 6 เดือนล่าสุดเฉลี่ย ≈ 0 เมื่อฝึกโมเดลด้วยการสุ่ม 6 ชุด
+    (ผล +47 ของ run #55/#57 มาจากชุดที่ดีที่สุด) → ใช้บน Demo เพื่อเก็บข้อมูลเท่านั้น ห้ามเสนอให้ใช้เงินจริง
+  - **กฎที่ใช้โมเดลต้องรายงานผลข้าม seed เสมอ:** `Phase1.exe predict seed:<n>` แล้ว `study:... seed:<n>` (seed 0 = ชุดที่ export ให้ cBot; ไฟล์ cache ของ seed อื่นลบได้)
+  - โมเดลอยู่นอก repo: `Phase1.exe export` → `Documents\BacktestLab\model\XAUUSD-5m.json` (สร้างใหม่ทุกเดือนหลังอัปเดตไฟล์แท่ง M1; ต้องมี `data\news\events.csv` ด้วย)
+    seed ของการฝึกผูกกับเดือนปฏิทิน โมเดลจึงไม่เปลี่ยนเมื่อไฟล์ข้อมูลเริ่มที่จุดอื่น
   - feature 35 ตัวมีสองที่ (`research\Phase1\Program.cs` และ `ScalpPullback.cs`) ต้องเหมือนกันทุกประการ — แก้แล้วตรวจด้วย `-Dump -NoSend` + `Phase1.exe study:parity`
-  - cTrader โหมดข้อมูล M1 เติม SL ที่ปลายแท่ง (แย่เกินจริง) ส่วนการจำลองชั้น 0 เติมที่ SL พอดี (ดีเกินจริง) → กฎที่มี SL ต้องยืนยันด้วย `-DataMode ticks -Commission 8` (ไม่ใส่ -Spread)
-- สถานะ: กฎ R1 = `CH_SESSION_MOM` (โมเมนตัมข้าม session, เข้า 07:00 และ 10:00 UTC, ปิด 20:45 UTC) กำไรครบ 3 ช่วง (run #49–#51)
-  แต่ drawdown สูง (27–64% ของบัญชี 1,000) และยังไม่ได้ทดสอบเดินหน้า — หน้า `summary.html` แสดงกฎนี้
+  - cTrader โหมดข้อมูล M1 เติม SL ที่ปลายแท่ง (แย่เกินจริง) ส่วนการจำลองชั้น 0 เติมที่ SL พอดี (ใกล้ผล tick) → กฎที่มี SL ต้องยืนยันด้วย tick
+- กฎ R1 = `CH_SESSION_MOM` (โมเมนตัมข้าม session, เข้า 07:00 และ 10:00 UTC, ปิด 20:45 UTC) กำไรครบ 3 ช่วงเดิม (run #49–#51)
+  แต่ drawdown สูง (27–64% ของบัญชี 1,000) ใช้กับทุน 100 ไม่ได้ — หน้า `summary.html` แสดงกฎนี้
+
+### รันสดบนบัญชี Demo + เก็บข้อมูลตลาดจริง (Phase 1B)
+
+ผู้ใช้ต้องการศึกษาพฤติกรรมราคาจริง (ความเร็ว, ข่าว, volume ที่ backtest ไม่มี) ไม่ใช่แค่ทดสอบกฎที่ผ่านแล้ว — **ผู้ใช้เป็นคนกด Start cBot เองใน cTrader เท่านั้น**
+(Claude ห้ามเริ่ม cBot / ส่งคำสั่งเทรดผ่าน MCP, CLI `run` หรือคุมหน้าจอ)
+
+- ตั้งค่า: กราฟ XAUUSD **M1**, Strategy code `SCALP_S3D`, P1 0.56, P2 5, P3 5, P4 1, Lots 0.01 · กลุ่ม Live: `Record market` = Yes,
+  `Place orders` = Yes (No = บันทึกอย่างเดียว), `Book snapshot every (s)` = 2 · cBot ต้องได้สิทธิ์ Full access และ cTrader ต้องเปิดค้างไว้
+- robot ไม่ส่งคำสั่งบนบัญชีเงินจริงเด็ดขาด (`Account.IsLive` → บันทึกอย่างเดียว) และตอนเริ่มจะโหลดประวัติ ≥ 6,000 แท่งให้ทฤษฎี
+- `LiveRecorder.cs` เขียนลง `%LOCALAPPDATA%\BacktestLab\live\<symbol>\` (นอก OneDrive): `tick-<วัน>.csv` (ทุก tick), `book-<วัน>.csv` (DOM: ราคา:ปริมาณ ทุกชั้น),
+  `min-<เดือน>.csv` (สรุปรายนาที + ข่าว + P(ขึ้น) + สัญญาณ), `trades.csv` (ราคาที่เห็น vs ราคาที่ได้, latency), `runs.csv` — ไฟล์วันเก่าถูกบีบเป็น .gz เอง (~2 MB/วัน)
+  ข่าวมาจาก `events.csv` + ปฏิทิน Forex Factory รายสัปดาห์ที่ตัวบันทึกดึงเองเมื่อขึ้นสัปดาห์ใหม่
+- ตรวจว่ากำลังบันทึกอยู่: `tools\live-status.ps1` · วิเคราะห์: `Phase1.exe live` (6 ตาราง: tick ถี่/บาง → ราคาไปต่อ, DOM เอียง → ทิศ, สเปรดรายชั่วโมง, หลังข่าว, คำทำนายสด, slippage)
+- ทดสอบตัวบันทึกโดยไม่ต้องรอตลาด: `tools\backtest.ps1 ... -Record -NoSend` → โฟลเดอร์ `live-test` (ไม่มี DOM) แล้ว `Phase1.exe live-test`
+- ทองแบบ spot ไม่มี volume ซื้อขายจริงจากตลาดกลาง: สิ่งที่มีคือ tick volume (จำนวนครั้งที่ราคาเปลี่ยน) และ DOM ของผู้ให้สภาพคล่องของโบรกเกอร์ — บอกผู้ใช้ตรงๆ เมื่อสรุปผล
 
 ### ระบบทำนายรายนาที (ตาม `D:\C2\promt claude.txt` ของผู้ใช้ — ทำเป็น Phase)
 
@@ -119,7 +143,7 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
   Phase1.exe อ่านไฟล์เหล่านี้เองและรันเทียบ "ไม่มีข่าว / มีข่าว" (~8 นาที) ผล: accuracy ไม่ดีขึ้นที่ 1–15 นาที (51.1–51.3%),
   60 นาทีดีขึ้นเล็กน้อย (≥62%: PF 1.13, 1,560 เทรด, กำไร 4 จาก 6 ปี) แต่ยังไม่ผ่านเกณฑ์; ข่าวทำให้กรอบ 5 นาทีใหญ่ขึ้น 2–8 เท่า
   → กฎที่ข้อมูลรองรับ: ไม่เปิดไม้ใหม่ 30 นาทีก่อนข่าว HIGH/EXTREME และ 5–30 นาทีหลังข่าว
-- **Phase 1B (ยังไม่ทำ):** cBot บันทึกคำทำนายสด + สเปรดจริง + tick โดยไม่เปิดออเดอร์
+- **Phase 1B (พร้อมใช้ 04/10/2026, รอข้อมูลจากตลาด):** `LiveRecorder.cs` บันทึกคำทำนายสด + สเปรดจริง + tick + DOM — ดูหัวข้อ "รันสดบนบัญชี Demo"
 - **Phase 2:** เปิดออเดอร์เฉพาะเมื่อ Phase 1 แสดง edge ที่ชนะต้นทุนนอกช่วงฝึกและสม่ำเสมอรายปี
 
 ## รัน backtest ผ่าน cTrader CLI
@@ -134,7 +158,7 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
 powershell -ExecutionPolicy Bypass -File tools\backtest.ps1 -Strategy EMA_CROSS -Symbol EURUSD -Period h1 `
     -Start "01/01/2025 00:00" -End "30/06/2025 00:00" -P1 9 -P2 21
 # ตัวเลือก: -P3 -P4 -Lots -StopLossPips -TakeProfitPips -MinStopPct -MaxStopPct -Spread -Commission -FlatTime (HHmm UTC)
-#           -Balance -DataMode (ticks|m1|open) -Note -Step -TimeoutMinutes -NoSend -SaveLocal -CliReport
+#           -Balance -DataMode (ticks|m1|open; ค่าเริ่มต้น ticks) -Note -Step -TimeoutMinutes -NoSend -SaveLocal -CliReport -Dump -Record
 # -Build = sync ซอร์สจาก repo + build .algo ก่อนรัน (ใช้ทุกครั้งที่แก้ไฟล์ใน cbot/)
 ```
 
@@ -143,7 +167,7 @@ powershell -ExecutionPolicy Bypass -File tools\backtest.ps1 -Strategy EMA_CROSS 
   → ตาราง `backtest_jobs` → แถบ "กำลังทดสอบ" บนหน้าแรกและหน้าทฤษฎีกราฟ; รันหลายตัวต่อกันให้ใส่ `-Step "3/10"`
 - log เต็มอยู่ที่ `Documents\BacktestLab\logs\` (อยู่ใน OneDrive ของผู้ใช้ — อย่าเปิด `-CliReport` โดยไม่จำเป็น ไฟล์รายงานของ CLI ใหญ่ ~180 MB ต่อรอบ)
 - วันที่เป็น `dd/MM/yyyy HH:mm` (UTC) และวัน `-End` ถูกนับรวมทั้งวัน
-- **ใส่ `-Spread` ทุกครั้ง** (หน่วย pips): กับข้อมูล m1 ค่าเริ่มต้นของ CLI คือสเปรด 0 และ commission 0 ผลจะดีเกินจริงมาก
+- ข้อมูล tick (ค่าเริ่มต้น) มีสเปรดจริง ใส่แค่ `-Commission` (ทอง Razor = 8) · **ถ้าใช้ `-DataMode m1` ต้องใส่ `-Spread` ทุกครั้ง** (หน่วย pips): ค่าเริ่มต้นของ CLI คือสเปรด 0 และ commission 0 ผลจะดีเกินจริงมาก
   ทอง (XAUUSD, 1 pip = 0.1) ใช้ `-Spread 2`; EURUSD ใช้ราว `-Spread 1`
 - ครั้งแรกของแต่ละ symbol CLI ต้องโหลดข้อมูลย้อนหลัง (ทอง 3 ปีราว 7 นาที) ครั้งต่อไป M1 3 ปีจบในราว 1 นาที
 - ห้ามเปิดอ่านไฟล์รหัสผ่าน ให้ส่งเป็น `--pwd-file=<ที่อยู่>` เท่านั้น และใช้บัญชี Demo เท่านั้น
@@ -175,7 +199,8 @@ curl -s -X DELETE -H "x-ingest-key: $KEY" "$API/runs/42"
 
 ฟิลด์สำคัญของ run: `net_profit`, `win_rate` (%), `profit_factor`, `max_dd_pct` (%), `total_trades`, `params`,
 `date_from`/`date_to`, `strategy.{code,version,theory,entry_rules}`
-ไฟล์ Drive: `trades[]` = `{id, side, entryTime, exitTime, entryPrice, exitPrice, volume, pips, gross, commissions, swap, net}`,
+ไฟล์ Drive: `trades[]` = `{id, side, entryTime, exitTime, entryPrice, exitPrice, volume, pips, gross, commissions, swap, net, sl?, tp?, tag?,
+bars?: [[unix, o, h, l, c], ...], example?}` — `bars` แนบทุกเทรด (รวมไม่เกิน 50,000 แท่งต่อรอบ; เกินแล้วเทรดเก่าสุดไม่มี) ให้หน้า run กดแถวแล้วเห็นกราฟ,
 `equity[]` = `[unixSeconds, equity]`
 
 เวลาวิเคราะห์ให้เทียบ: ผลต่อ symbol/timeframe, ความไวต่อพารามิเตอร์, จำนวนเทรดพอมีนัยสำคัญไหม (< 30 เทรด = เชื่อถือน้อย),
