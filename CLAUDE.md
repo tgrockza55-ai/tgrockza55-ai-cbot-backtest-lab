@@ -79,6 +79,20 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
 ผลรอบแรก (04/10/2026): ทฤษฎีรวมที่ดีสุดในช่วงหากฎ (+1,140, PF 1.27) **ขาดทุนในช่วงทดสอบ** (-233.50, PF 0.77) — ทองร่วงจาก ~5,400 เป็น ~4,190
 และแกนหลักเป็นฝั่ง Buy อย่างเดียว ทฤษฎีที่ดูทรงบนแท่ง M1 ทั้งหมดขาดทุนตลอด 6 ปี
 
+### ระบบทำนายรายนาที (ตาม `D:\C2\promt claude.txt` ของผู้ใช้ — ทำเป็น Phase)
+
+เป้าหมายของผู้ใช้: cBot ทอง intraday ที่มี positive expectancy หลังหักต้นทุน โดย "NO EDGE = NO TRADE" และห้ามข้าม Phase
+บัญชีเป็น **Pepperstone Razor**: ต้นทุน = สเปรดดิบ + คอมมิชชั่น 30 USD ต่อล้านต่อขา (ไป-กลับ ~0.25 USD/ออนซ์ ที่ทอง 4,100)
+→ backtest ผ่าน CLI ควรใช้ `-Commission 30` คู่กับสเปรดดิบ (ยังไม่ได้วัดจริง สมมติ ~1.2 pips) แทน `-Spread 2 -Commission 0` แบบเดิม
+
+- **Phase 1A (เสร็จ 04/10/2026):** `research/Phase1` (C# console) จำลอง "ทำนายทุกนาที → เทียบผลจริง" บนแท่ง M1 2020–09/2026 แบบ walk-forward
+  build: `$env:MSBuildEnableWorkloadResolver = "false"; dotnet build -c Release research\Phase1` (SDK 6.0.100 ในเครื่องมีบั๊ก workload และ `dotnet run` ใช้ไม่ได้)
+  run: `research\Phase1\bin\Release\net6.0\Phase1.exe` (~3.5 นาที) → `docs\data\phase1-XAUUSD.json` → หน้า `phase1.html`
+  ผล: ทายถูก ~51.2% ทุกช่วงเวลา (1/3/5/15/60 นาที), ไม่ชนะ baseline "ตรงข้ามแท่งล่าสุด", ระยะที่ราคาไปตามทางที่ทายเล็กกว่าต้นทุน,
+  การเทรดไม่ซ้อนไม้ที่เกณฑ์ 56–62% ส่วนใหญ่ PF < 1 และที่ > 1 กระจุกในปี 2025–2026 → **ยังไม่ผ่านเกณฑ์ไป Phase 2**
+- **Phase 1B (ยังไม่ทำ):** cBot บันทึกคำทำนายสด + สเปรดจริง + tick โดยไม่เปิดออเดอร์
+- **Phase 2:** เปิดออเดอร์เฉพาะเมื่อ Phase 1 แสดง edge ที่ชนะต้นทุนนอกช่วงฝึกและสม่ำเสมอรายปี
+
 ## รัน backtest ผ่าน cTrader CLI
 
 ต้องมี `ctrader-cli` ใน PATH และไฟล์ตั้งค่าต่อเครื่อง `Documents\BacktestLab\cli.json` (ไม่อยู่ใน repo; ครั้งแรกสคริปต์จะถามแล้วสร้างให้):

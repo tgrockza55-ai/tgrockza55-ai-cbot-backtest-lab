@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Backtest Lab · Phase 1 ทำนายรายนาที</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="stack" id="main"><p class="muted">กำลังโหลด…</p></main>
+<script type="module">
+import { requireSession, h, $, showError, splitBar } from "./app.js";
+
+const SYMBOL = new URLSearchParams(location.search).get("symbol") ?? "XAUUSD";
+const REGIMES = { ranging: "ออกข้าง", trending: "มีเทรนด์", highVol: "ผันผวนสูง" };
+const SESSIONS = { asia: "เอเชีย (07–14 น.)", london: "ลอนดอน (14–20 น.)", newYork: "นิวยอร์ก (20–04 น.)", late: "ปลายวัน (04–07 น.)" };
+const BASELINES = { alwaysUp: "ทายขึ้นตลอด", sameAsLastCandle: "ทายตามแท่งล่าสุด", oppositeOfLastCandle: "ทายตรงข้ามแท่งล่าสุด", aboveEma20: "ราคาเหนือ EMA20 = ขึ้น" };
+
+const n0 = (v) => (v == null ? "–" : Math.round(v).toLocaleString("th-TH"));
+const p2 = (v) => (v == null ? "–" : `${v.toFixed(2)}%`);
+const d3 = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v.toFixed(3)}`);
+const sign = (v) => (v == null ? "" : v > 0 ? "pos" : v < 0 ? "neg" : "");
+const stat = (label, value, cls = "") => h("div", { class: "stat" }, h("div", { class: "label" }, label), h("div", { class: `value ${cls}` }, value));
+const table = (head, rows, numFrom = 1) => h("div", { class: "table-wrap" }, h("table", {},
+  h("thead", {}, h("tr", {}, head.map((t, i) => h("th", { class: i >= numFrom ? "num" : null }, t)))), h("tbody", {}, rows)));
+
+let data, minutes = 1;
+
+function statRow(label, s, total) {
+  return h("tr", { class: s.n < 1000 ? "weak" : "" },
+    h("td", {}, label),
+    h("td", { class: "num" }, n0(s.n)),
+    total != null && h("td", { class: "num" }, p2(100 * s.n / total)),
+    h("td", { class: "num" }, p2(s.accuracy)),
+    h("td", { class: "num" }, p2(s.avgConfidence)),
+    h("td", { class: "num" }, d3(s.avgMove)),
+    h("td", { class: "num" }, s.avgAbsMove?.toFixed(3) ?? "–"),
+    h("td", { class: "num" }, s.avgCost?.toFixed(3) ?? "–"),
+    h("td", { class: `num ${sign(s.evAfterCost)}` }, d3(s.evAfterCost)));
+}
+
+function tradeRow(label, t) {
+  const win = t.n ? 100 * t.wins / t.n : null, pf = t.grossLoss > 0 ? t.grossWin / t.grossLoss : null, net = t.grossWin - t.grossLoss;
+  return h("tr", { class: t.n < 100 ? "weak" : "" },
+    h("td", {}, label),
+    h("td", { class: "num" }, n0(t.n)),
+    h("td", { class: "num" }, p2(win)),
+    h("td", {}, win == null ? "" : splitBar(win, 100 - win)),
+    h("td", { class: `num ${pf == null ? "" : sign(pf - 1)}` }, pf == null ? "–" : pf.toFixed(2)),
+    h("td", { class: `num ${sign(net)}` }, n0(net)),
+    h("td", { class: "muted" }, t.n > 0 && t.n < 100 ? "ตัวอย่างน้อย" : ""));
+}
+
+function render() {
+  const hz = data.horizons.find((x) => x.minutes === minutes);
+  const all = hz.all, best = Math.max(...Object.values(hz.baselines));
+  const head = ["", "จำนวนคำทำนาย", "ถูกจริง", "โมเดลบอกว่า", "ราคาไปตามทางที่ทาย", "ขนาดการขยับ", "ต้นทุน", "หลังหักต้นทุน"];
+  const tab = (m) => h("button", { "aria-pressed": String(minutes === m), onclick: () => { minutes = m; render(); } }, `${m} นาที`);
+  const anyTradeWins = hz.trades.some((t) => t.grossWin > t.grossLoss && t.years.filter((y) => y.grossWin > y.grossLoss).length >= Math.ceil(t.years.length * 0.7));
+
+  $("#main").replaceChildren(
+    h("div", {},
+      h("h1", {}, `Phase 1 · ทำนายทุกนาทีแล้วเทียบกับผลจริง · ${data.symbol}`),
+      h("p", { class: "muted" }, `แท่ง M1 จริง ${data.from} ถึง ${data.to} · ทุกคำทำนายมาจากโมเดลที่ฝึกด้วย ${data.trainMonths} เดือนก่อนหน้าเท่านั้น (walk-forward) จึงไม่เคยเห็นข้อมูลที่มันทาย`)),
+    h("section", { class: "card" },
+      h("h2", {}, "ข้อสรุป: ยังไม่ผ่านเกณฑ์ไป Phase 2"),
+      h("p", {}, "โมเดลทายทิศทางได้ดีกว่าการเดาเล็กน้อย (ราว 51%) และความมั่นใจของมันเชื่อถือได้ แต่ระยะที่ราคาไปตามทางที่ทายเล็กกว่าต้นทุนของการเทรดหนึ่งไม้ ",
+        "ช่วงที่มั่นใจสูงพอจะชนะต้นทุนเกิดขึ้นน้อยมาก และกำไรกระจุกอยู่ในบางปี ไม่สม่ำเสมอ"),
+      h("p", { class: "muted" }, `ต้นทุนที่ใช้ (บัญชี Razor): สเปรดดิบ + slippage ${data.fixedCost} ดอลลาร์ต่อออนซ์ + คอมมิชชั่นไป-กลับ ${data.commissionRoundTripPerMillion} ดอลลาร์ต่อล้าน · ค่าสเปรดดิบเป็นค่าสมมติ ยังไม่ได้วัดจากบัญชีจริง`)),
+    h("div", { class: "tabs", role: "group", "aria-label": "ทำนายล่วงหน้ากี่นาที" }, data.horizons.map((x) => tab(x.minutes))),
+    h("div", { class: "stats" },
+      stat("คำทำนาย", n0(all.n)),
+      stat("ทายถูก", p2(all.accuracy)),
+      stat("baseline ที่ดีที่สุด", p2(best), all.accuracy > best ? "" : "neg"),
+      stat("ขนาดการขยับเฉลี่ย", all.avgAbsMove.toFixed(3)),
+      stat("ต้นทุนเฉลี่ยต่อไม้", all.avgCost.toFixed(3)),
+      stat("Brier (0.25 = เดา)", all.brier.toFixed(4))),
+
+    h("section", { class: "stack" },
+      h("h2", {}, "แยกตามความมั่นใจของโมเดล"),
+      h("p", { class: "muted" }, "ถ้า \"ถูกจริง\" ใกล้กับ \"โมเดลบอกว่า\" แปลว่าความมั่นใจเชื่อถือได้ · \"หลังหักต้นทุน\" ต้องเป็นบวกจึงจะคุ้มเทรด · แถวจาง = น้อยกว่า 1,000 ครั้ง"),
+      table(["ความมั่นใจ", "จำนวนคำทำนาย", "สัดส่วน", "ถูกจริง", "โมเดลบอกว่า", "ราคาไปตามทางที่ทาย", "ขนาดการขยับ", "ต้นทุน", "หลังหักต้นทุน"],
+        hz.buckets.filter((b) => b.stats.n > 0).map((b) => statRow(`${b.range}%`, b.stats, all.n)))),
+
+    h("section", { class: "stack" },
+      h("h2", {}, "เทียบกับการทายแบบง่าย"),
+      table(["วิธี", "ทายถูก"], [
+        h("tr", {}, h("td", {}, h("b", {}, "โมเดล")), h("td", { class: "num" }, p2(all.accuracy))),
+        ...Object.entries(hz.baselines).map(([k, v]) => h("tr", {}, h("td", {}, BASELINES[k] ?? k), h("td", { class: `num ${v > all.accuracy ? "neg" : ""}` }, p2(v)))),
+      ]),
+      h("p", { class: "muted" }, "ตัวแดง = วิธีง่ายๆ ทายถูกมากกว่าโมเดล")),
+
+    h("section", { class: "stack" },
+      h("h2", {}, `ถ้าเทรดจริงตามคำทำนาย (ถือ ${minutes} นาที ไม่ซ้อนไม้)`),
+      h("p", { class: "muted" }, "เข้าเมื่อความมั่นใจถึงเกณฑ์ ถือครบเวลา แล้วจึงมองหาไม้ใหม่ · หักต้นทุนแล้ว · Net เป็นดอลลาร์ต่อการเทรด 1 ออนซ์"),
+      table(["เกณฑ์ / ปี", "เทรด", "ชนะ", "สัดส่วน", "PF", "Net", ""], hz.trades.flatMap((t) => [
+        h("tr", { class: "group" }, h("td", { colspan: 7 }, `เข้าเมื่อมั่นใจ ≥ ${Math.round(t.threshold * 100)}%`)),
+        ...t.years.map((y) => tradeRow(y.year, y)), tradeRow("รวม", t),
+      ])),
+      h("p", { class: "notice" }, anyTradeWins
+        ? "มีบางเกณฑ์ที่กำไรรวมและกำไรอย่างน้อย 70% ของปี — ควรยืนยันด้วยการบันทึกสดก่อนใช้จริง"
+        : "ไม่มีเกณฑ์ไหนที่กำไรรวมและกำไรสม่ำเสมออย่างน้อย 70% ของปี — ยังไม่มีหลักฐานของความได้เปรียบที่ใช้เทรดได้")),
+
+    h("section", { class: "stack" },
+      h("h2", {}, "แยกตามปี สภาพตลาด และช่วงเวลา"),
+      h("p", { class: "muted" }, "แถว \"มั่นใจ ≥ 56%\" คือเฉพาะคำทำนายที่โมเดลมั่นใจตั้งแต่ 56% ขึ้นไป"),
+      table(head, [
+        ["years", "ปี", (x) => x.year], ["regimes", "สภาพตลาด", (x) => REGIMES[x.name] ?? x.name], ["sessions", "ช่วงเวลา (เวลาไทย)", (x) => SESSIONS[x.name] ?? x.name],
+      ].flatMap(([key, title, label]) => [
+        h("tr", { class: "group" }, h("td", { colspan: 8 }, title)),
+        ...hz[key].flatMap((x) => [statRow(`${label(x)} · ทั้งหมด`, x.all), statRow(`${label(x)} · มั่นใจ ≥ 56%`, x.confident)]),
+      ]))),
+
+    h("section", { class: "card" },
+      h("h2", {}, "วิธีทำ และข้อจำกัด"),
+      h("ul", {},
+        h("li", {}, `Feature ${data.features.length} ตัวจากข้อมูล ≤ เวลา T เท่านั้น: ผลตอบแทนย้อนหลัง รูปร่างแท่ง ปริมาณ ระยะจากค่าเฉลี่ย/VWAP ความผันผวน ระยะจาก High/Low ของวันและวันก่อน การกวาดสภาพคล่อง เวลาของวัน`),
+        h("li", {}, "โมเดล: logistic regression ฝึกใหม่ทุกเดือนด้วยข้อมูล 12 เดือนก่อนหน้า — เป็นโมเดลเส้นตรงแบบพื้นฐาน โมเดลที่ซับซ้อนกว่าอาจได้ผลต่างออกไป"),
+        h("li", {}, "ข้อมูลย้อนหลังมีแค่แท่ง M1 (ราคา + tick volume): ไม่มีสเปรดจริงรายนาที ไม่มี tick ไม่มี order book ไม่มีข่าว — ส่วนนั้นต้องเก็บสดด้วย cBot (Phase 1B)"),
+        h("li", {}, "คำทำนายนาทีติดกันซ้อนทับกัน จำนวนเหตุการณ์อิสระจริงจึงน้อยกว่าจำนวนคำทำนายมาก ตาราง \"ถ้าเทรดจริง\" แก้เรื่องนี้ด้วยการไม่ซ้อนไม้"))),
+  );
+}
+
+const session = await requireSession();
+if (session) {
+  try {
+    const res = await fetch(`data/phase1-${encodeURIComponent(SYMBOL)}.json`, { cache: "no-cache" });
+    if (!res.ok) throw new Error(`ยังไม่มีไฟล์ผล Phase 1 ของ ${SYMBOL}`);
+    data = await res.json();
+    render();
+  } catch (e) { $("#main").replaceChildren(); showError(e); }
+}
+</script>
+</body>
+</html>

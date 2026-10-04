@@ -10,6 +10,7 @@ const PAGES = [
   ["strategies.html", "คลังทฤษฎี"],
   ["chart.html", "ทฤษฎีกราฟ"],
   ["daystudy.html", "สถิติรายวัน"],
+  ["phase1.html", "ทำนายรายนาที"],
 ];
 
 export const $ = (sel, root = document) => root.querySelector(sel);
