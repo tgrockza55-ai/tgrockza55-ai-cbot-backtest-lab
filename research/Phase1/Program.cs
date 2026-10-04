@@ -111,8 +111,9 @@ static partial class Phase1
         var docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         var study = args.FirstOrDefault(a => a.StartsWith("study:"))?.Substring(6);          // tier-0 event studies (Studies.cs)
         var period = args.FirstOrDefault(a => a.StartsWith("period:"))?.Substring(7) ?? "explore";
+        var export = args.Contains("export");                                                // write the monthly models for the cBot
         var predict = args.Contains("predict");                                              // save walk-forward predictions for the scalp studies
-        args = args.Where(a => !a.StartsWith("study:") && !a.StartsWith("period:") && a != "predict").ToArray();
+        args = args.Where(a => !a.StartsWith("study:") && !a.StartsWith("period:") && a != "predict" && a != "export").ToArray();
         var symbol = args.Length > 1 ? args[1] : "XAUUSD";
         var csv = args.Length > 0 && args[0] != "-" ? args[0] : Path.Combine(docs, "BacktestLab", "data", symbol + "_Minute.csv");
         FixedCost = args.Length > 2 ? double.Parse(args[2], Inv) : 0.22;
@@ -124,10 +125,11 @@ static partial class Phase1
         Console.WriteLine($"bars: {T.Length:N0}  {Date(T[0])} .. {Date(T[T.Length - 1])}   cost per trade: {FixedCost} + {CommissionRate * 1e6:N0} per million round trip (= {Cost(0):N3} at {C[0]:N0}, {Cost(T.Length - 1):N3} at {C[T.Length - 1]:N0})");
         HasNews = LoadNews(docs);
         SymbolName = symbol;
-        if (study != null && study != "h9" && study != "h10" && study != "s3") return RunStudy(study, period);
+        if (study != null && study != "h9" && study != "h10" && study != "s3" && study != "s3x" && study != "parity") return RunStudy(study, period);
         BuildFeatures();
-        if (study == "h9" || study == "h10" || study == "s3") return RunStudy(study, period);
+        if (study == "h9" || study == "h10" || study == "s3" || study == "s3x" || study == "parity") return RunStudy(study, period);
         if (predict) { SavePredictions(); return 0; }
+        if (export) { ExportModels(docs, 5); return 0; }
         Console.WriteLine($"features: {BaseCount} price/volume" + (HasNews ? $" + {FeatureNames.Length - BaseCount} news/macro ({EvT.Length} scheduled releases, {MacroDay?.Length ?? 0} macro days)" : "  (no news cache: run tools\\news-fetch.ps1)"));
         var eventJson = "";
         if (HasNews) { Console.WriteLine("release-time check:"); eventJson = EventStudy(); }
@@ -383,7 +385,8 @@ static partial class Phase1
 
     // ------------------------------------------------------------------ walk-forward logistic regression
 
-    class Pred { public int Bar; public float P; public float Move; }      // P = P(up); Move = close[T+h] - close[T]
+    class Pred { public int Bar; public float P; public float Move; }
+    static List<(long from, double[] mean, double[] std, double[] w, double bias)> ModelSink;   // filled by WalkForward when exporting      // P = P(up); Move = close[T+h] - close[T]
 
     static List<Pred> WalkForward(int h, List<long> months)
     {
@@ -436,6 +439,8 @@ static partial class Phase1
                     vb = Mom * vb - lr * gb / cnt; bias += vb;
                 }
             }
+
+            if (ModelSink != null) lock (ModelSink) ModelSink.Add((testFrom, mean, std, (double[])w.Clone(), bias));
 
             var list = new List<Pred>(c - b);
             for (int i = b; i < c; i++)

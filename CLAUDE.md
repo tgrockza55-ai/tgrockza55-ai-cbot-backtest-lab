@@ -90,7 +90,11 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
 - ช่วงข้อมูล: explore 2020–2024 (ลองได้อิสระ), validate 2025–02/2026 และ holdout 03–09/2026 (เปิดดูเฉพาะกฎที่ล็อกแล้ว และจดทุกครั้งใน JOURNAL)
 - **ทุนจริงของผู้ใช้ = 100 USD และเน้น scalp** (แจ้ง 04/10/2026): 0.01 lot = 1 ออนซ์ → ทองขยับ 1 USD = 1% ของบัญชี; ทุกกฎต้องรายงาน drawdown เป็น USD ต่อออนซ์ (= % ของทุน)
   งาน scalp ใช้เฉพาะช่วงผันผวนสูง: `period:hv-explore` (2025-01..2026-02), `hv-validate` (2026-03..06), `hv-holdout` (2026-07..09)
-  ตัวเต็ง scalp = S3b (โมเดล 5 นาที ≥ 56% + ทิศเดียวกับวัน + เฉพาะลอนดอน + เลี่ยงข่าว): `Phase1.exe predict` แล้ว `study:s3`; ยังไม่มีใน cBot
+  ตัวเต็ง scalp = **S3d** = ทฤษฎี `SCALP_S3D` ใน cBot (`Strategies\ScalpPullback.cs`): โมเดล 5 นาที ≥ 56% + ทิศเดียวกับวัน + เฉพาะลอนดอน + เลี่ยงข่าว,
+  ถือ 5 นาที, SL 5 USD, ไม่มี TP — รัน: `tools\backtest.ps1 -Strategy SCALP_S3D -Period m1 -Balance 100 -Spread 2.2 -P1 0.56 -P2 5 -P3 5 -P4 1`
+  - โมเดลอยู่นอก repo: `Phase1.exe export` → `Documents\BacktestLab\model\XAUUSD-5m.json` (ต้องสร้างใหม่ทุกเดือนหลังอัปเดตไฟล์แท่ง M1; ต้องมี `data\news\events.csv` ด้วย)
+  - feature 35 ตัวมีสองที่ (`research\Phase1\Program.cs` และ `ScalpPullback.cs`) ต้องเหมือนกันทุกประการ — แก้แล้วตรวจด้วย `-Dump -NoSend` + `Phase1.exe study:parity`
+  - cTrader โหมดข้อมูล M1 เติม SL ที่ปลายแท่ง (แย่เกินจริง) ส่วนการจำลองชั้น 0 เติมที่ SL พอดี (ดีเกินจริง) → กฎที่มี SL ต้องยืนยันด้วย `-DataMode ticks -Commission 8` (ไม่ใส่ -Spread)
 - สถานะ: กฎ R1 = `CH_SESSION_MOM` (โมเมนตัมข้าม session, เข้า 07:00 และ 10:00 UTC, ปิด 20:45 UTC) กำไรครบ 3 ช่วง (run #49–#51)
   แต่ drawdown สูง (27–64% ของบัญชี 1,000) และยังไม่ได้ทดสอบเดินหน้า — หน้า `summary.html` แสดงกฎนี้
 

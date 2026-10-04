@@ -131,7 +131,7 @@ namespace cAlgo.Robots
                 var d = Math.Max(distance.Value, price * MinStopPct / 100);
                 if (MaxStopPct > 0) d = Math.Min(d, price * MaxStopPct / 100);
                 sl = Math.Round(d / Symbol.PipSize, 1);
-                tp = Math.Round(sl.Value * _strategy.RewardRisk, 1);
+                tp = _strategy.RewardRisk > 0 ? Math.Round(sl.Value * _strategy.RewardRisk, 1) : (double?)null;   // RewardRisk <= 0 = ไม่มี TP
                 _structureStops = true;
             }
             var result = ExecuteMarketOrder(signal.Value, SymbolName, volume, Label, sl, tp, _strategy.SignalTag);

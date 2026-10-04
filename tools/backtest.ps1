@@ -28,7 +28,8 @@ param(
     [string]$Step = "",                              # shown with the progress on the website, e.g. "3/10"
     [switch]$NoSend,                                 # research run: do not send the result to the lab
     [switch]$SaveLocal,                              # also write the report to Documents\BacktestLab\local\<code>-<symbol>-<tf>.json
-    [switch]$CliReport,                              # keep ctrader-cli's own (very large) JSON report next to the log
+    [switch]$CliReport,
+    [switch]$Dump,                                   # SCALP_S3D only: write every prediction to Documents\BacktestLab\data\scalp-dump.csv (parity check)                              # keep ctrader-cli's own (very large) JSON report next to the log
     [switch]$Build,
     [int]$TimeoutMinutes = 30
 )
@@ -170,7 +171,9 @@ $tick = {
 Write-Host ("Backtest {0} {1} {2}  {3} -> {4}" -f $Strategy, $Symbol, $Period, $Start, $End) -ForegroundColor Cyan
 Send-Progress "Starting" 0 "running" $null
 $sw = [Diagnostics.Stopwatch]::StartNew()
+if ($Dump) { $env:BACKTESTLAB_DUMP = "1" }
 $ok = Invoke-Cli ($a -join " ") $log ($TimeoutMinutes * 60) "] stopped." $tick
+$env:BACKTESTLAB_DUMP = $null
 Write-Host ("Finished in {0} s. Log: {1}" -f [int]$sw.Elapsed.TotalSeconds, $log)
 
 $lines = @(Get-Content $log -ErrorAction SilentlyContinue) + @(Get-Content "$log.err" -ErrorAction SilentlyContinue)

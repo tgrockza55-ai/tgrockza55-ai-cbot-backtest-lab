@@ -69,6 +69,8 @@ static partial class Phase1
         if (name == "h9") ScalpGate();
         if (name == "h10") ScalpAnatomy();
         if (name == "s3") ScalpRuleS3();
+        if (name == "s3x") ScalpExits();
+        if (name == "parity") Parity();
         return 0;
     }
 
@@ -95,6 +97,53 @@ static partial class Phase1
             }
         }
         Console.WriteLine("wrote " + CachePath + $" ({new System.IO.FileInfo(CachePath).Length / 1048576} MB)");
+    }
+
+    // ------------------------------------------------------------------ model export for the cBot (strategy SCALP_S3D)
+    // Phase1.exe export -> Documents\BacktestLab\model\<symbol>-5m.json : one logistic model per month (trained on the 12 months before it),
+    // plus one for the month after the data ends, which is the model to trade live with. Re-run monthly after refreshing the bar file.
+
+    static void ExportModels(string docs, int h)
+    {
+        var months = MonthStarts();
+        var lastBar = DateTimeOffset.FromUnixTimeSeconds(T[T.Length - 1]).UtcDateTime;
+        var next = new DateTimeOffset(lastBar.Year, lastBar.Month, 1, 0, 0, 0, TimeSpan.Zero).AddMonths(1).ToUnixTimeSeconds();
+        months.Insert(months.Count - 1, next);
+        Active = X.Take(BaseCount).ToArray();
+        ModelSink = new List<(long, double[], double[], double[], double)>();
+        WalkForward(h, months);
+        var models = ModelSink.OrderBy(m => m.from).ToList(); ModelSink = null;
+        string Arr(double[] a) => "[" + string.Join(",", a.Select(v => v.ToString("R", Inv))) + "]";
+        var sb = new System.Text.StringBuilder();
+        sb.Append("{\"symbol\":\"").Append(SymbolName).Append("\",\"horizon\":").Append(h).Append(",\"trainedThrough\":\"").Append(Date(T[T.Length - 1]))
+          .Append("\",\"features\":[").Append(string.Join(",", FeatureNames.Take(BaseCount).Select(n => "\"" + n + "\""))).Append("],\"models\":[");
+        sb.Append(string.Join(",", models.Select(m => "{\"from\":" + m.from + ",\"mean\":" + Arr(m.mean) + ",\"std\":" + Arr(m.std) + ",\"w\":" + Arr(m.w) + ",\"b\":" + m.bias.ToString("R", Inv) + "}")));
+        sb.Append("]}");
+        var file = System.IO.Path.Combine(docs, "BacktestLab", "model", SymbolName + "-" + h + "m.json");
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file));
+        System.IO.File.WriteAllText(file, sb.ToString());
+        Console.WriteLine($"exported {models.Count} monthly models ({Date(models[0].from)} .. {Date(models[models.Count - 1].from)}) -> {file}");
+    }
+
+    /// <summary>Compare the predictions the cBot wrote (BACKTESTLAB_DUMP=1 -> data\scalp-dump.csv) with the research cache.</summary>
+    static void Parity()
+    {
+        var preds = LoadPredictions(); if (preds == null) return;
+        var file = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "BacktestLab", "data", "scalp-dump.csv");
+        if (!System.IO.File.Exists(file)) { Console.WriteLine("no dump: " + file); return; }
+        var byBar = preds[5].ToDictionary(p => p.Bar, p => (double)p.P);
+        int n = 0, missing = 0, sideSame = 0, both56 = 0, either56 = 0; double sumAbs = 0, maxAbs = 0;
+        foreach (var line in System.IO.File.ReadLines(file).Skip(1))
+        {
+            var p = line.Split(','); if (p.Length < 2) continue;
+            int i = Array.BinarySearch(T, long.Parse(p[0], Inv));
+            if (i < 0 || !byBar.TryGetValue(i, out var r)) { missing++; continue; }
+            double c = double.Parse(p[1], Inv), d = Math.Abs(c - r);
+            n++; sumAbs += d; maxAbs = Math.Max(maxAbs, d); if ((c >= 0.5) == (r >= 0.5)) sideSame++;
+            bool a = Math.Max(c, 1 - c) >= 0.56, b = Math.Max(r, 1 - r) >= 0.56;
+            if (a || b) either56++; if (a && b && (c >= 0.5) == (r >= 0.5)) both56++;
+        }
+        Console.WriteLine($"\nparity cBot vs research: bars compared {n:N0} (not in cache {missing:N0})  mean |diff| {sumAbs / Math.Max(1, n):N5}  max |diff| {maxAbs:N4}  same side {100.0 * sideSame / Math.Max(1, n):N2}%  confident signals agreeing {both56} of {either56}");
     }
 
     static Dictionary<int, List<Pred>> LoadPredictions()
@@ -152,6 +201,71 @@ static partial class Phase1
             Console.WriteLine($"   max drawdown {maxDd:N0}   worst trade {worst:N1}   worst day {daysPnl.Values.Min():N1}   best day {daysPnl.Values.Max():N1}   losing days {100.0 * daysPnl.Values.Count(v => v < 0) / daysPnl.Count:N0}%");
             Console.WriteLine("   by month (net, trades): " + string.Join("  ", months.Select(kv => $"{kv.Key}: {kv.Value.Sum.ToString("+0;-0", Inv)} ({kv.Value.N})")));
         }
+    }
+
+    // ------------------------------------------------------------------ S3b exits: hard stop / target / maximum hold, replayed bar by bar
+    // Entries are the S3b entries (5-minute model >= 56%, with the day, London, away from news). Conservative replay:
+    // a bar that touches both stop and target counts as the stop; a bar that opens beyond the stop exits at its open.
+
+    /// <summary>
+    /// Replays one trade the way the cBot executes it: the signal comes from the closed bar `bar`, the order is filled at the OPEN of the
+    /// next bar, and the time exit happens at the open of the bar `hold` minutes later. Returns USD per oz before cost.
+    /// nextBar = the first bar whose prediction may open a new trade.
+    /// </summary>
+    static double ReplayExit(int bar, int dir, double sl, double tp, int hold, out int nextBar)
+    {
+        int e = bar + 1; nextBar = bar + 1;
+        if (e >= T.Length || T[e] - T[bar] > 120) return double.NaN;          // no next bar to fill on (market closing)
+        double entry = O[e]; long t0 = T[e];
+        for (int j = e; j < T.Length; j++)
+        {
+            if (T[j] - t0 >= hold * 60L) { nextBar = j - 1; return dir * (O[j] - entry); }
+            nextBar = j;
+            double open = dir * (O[j] - entry), best = dir * ((dir > 0 ? H[j] : L[j]) - entry), worst = dir * ((dir > 0 ? L[j] : H[j]) - entry);
+            if (sl > 0 && open <= -sl) return open;            // gapped through the stop
+            if (sl > 0 && worst <= -sl) return -sl;            // a bar touching both stop and target counts as the stop
+            if (tp > 0 && best >= tp) return tp;
+        }
+        return dir * (C[T.Length - 1] - entry);
+    }
+
+    static void ScalpExits()
+    {
+        var preds = LoadPredictions(); if (preds == null) return;
+        int n = T.Length; const double th = 0.56;
+        var dayOpen = new double[n]; long curDay = -1; double open = 0;
+        for (int i = 0; i < n; i++) { long d = T[i] / 86400; if (d != curDay) { curDay = d; open = O[i]; } dayOpen[i] = open; }
+        Console.WriteLine("\n==== S3b exit grid (London pullback scalp with the day). USD per oz after cost = percent of a 100 USD account ====");
+        Console.WriteLine("hold  SL    TP      n  /day   win%     avg    PF     net  maxDD  worst trade  worst day  losing days");
+        var logPath = Environment.GetEnvironmentVariable("PHASE1_TRADES");          // debugging aid: write the trades of (hold 5, SL 5, no TP) to this file
+        using var tradeLog = string.IsNullOrEmpty(logPath) ? null : new System.IO.StreamWriter(logPath, false);
+        tradeLog?.WriteLine("unix,dir,entry,raw");
+        foreach (int hold in new[] { 5, 15, 30 })
+            foreach (double sl in new[] { 0.0, 2, 3, 5 })
+                foreach (double mult in sl == 0 ? new[] { 0.0 } : new[] { 0.0, 1, 2 })
+                {
+                    double tp = sl * mult;
+                    var st = new St(); double gw = 0, gl = 0, cum = 0, peak = 0, maxDd = 0, worst = 0; long freeAt = 0, first = 0, last = 0;
+                    var daysPnl = new Dictionary<long, double>();
+                    foreach (var p in preds[5])
+                    {
+                        long t = T[p.Bar]; int i = p.Bar;
+                        double conf = p.P >= 0.5 ? p.P : 1 - p.P;
+                        if (!InPeriod(t) || t < freeAt || conf < th || Window[i] != 0 || Session[i] != 1) continue;
+                        int dir = p.P >= 0.5 ? 1 : -1;
+                        if (Math.Sign(C[i] - dayOpen[i]) != dir) continue;
+                        double raw = ReplayExit(i, dir, sl, tp, hold, out int next);
+                        if (double.IsNaN(raw)) continue;
+                        double pnl = raw - FixedCost;
+                        freeAt = T[next]; if (first == 0) first = t; last = t;
+                        if (tradeLog != null && hold == 5 && sl == 5 && tp == 0) tradeLog.WriteLine(string.Join(",", T[i + 1], dir, O[i + 1].ToString(Inv), raw.ToString("0.###", Inv)));
+                        st.Add(pnl); if (pnl > 0) gw += pnl; else gl -= pnl;
+                        cum += pnl; peak = Math.Max(peak, cum); maxDd = Math.Max(maxDd, peak - cum); worst = Math.Min(worst, pnl);
+                        daysPnl[t / 86400] = (daysPnl.TryGetValue(t / 86400, out var dp) ? dp : 0) + pnl;
+                    }
+                    if (st.N == 0) continue;
+                    Console.WriteLine($"{hold,4}  {(sl > 0 ? sl.ToString("0", Inv) : "-"),3}  {(tp > 0 ? tp.ToString("0", Inv) : "-"),4}  {st.N,5}  {st.N / Math.Max(1, (last - first) / 86400.0 * 5 / 7),4:N1}  {st.Win,5:N1}  {st.Mean,6:N3}  {(gl > 0 ? gw / gl : 0),4:N2}  {st.Sum,6:N0}  {maxDd,5:N0}  {worst,11:N1}  {daysPnl.Values.Min(),9:N1}  {100.0 * daysPnl.Values.Count(v => v < 0) / daysPnl.Count,10:N0}%");
+                }
     }
 
     // ------------------------------------------------------------------ H10: where do the scalp trades of the minute model win and lose?
