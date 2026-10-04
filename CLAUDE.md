@@ -15,6 +15,8 @@ supabase/schema.sql          ตาราง strategies, backtest_runs, view str
 supabase/functions/lab/      Edge Function: /ingest, /runs, /runs/:id, /runs/:id/file, /health
 docs/                        เว็บ (GitHub Pages): index, run, strategies + app.js, config.js
 tools/sync-cbot.ps1          ก๊อปซอร์สไป Documents\cAlgo\Sources\Robots\BacktestLab\BacktestLab + สร้าง config
+tools/backtest.ps1           รัน backtest 1 รอบผ่าน cTrader CLI (เพิ่ม -Build เพื่อ sync + build ก่อน)
+.mcp.json                    เชื่อม MCP ของ cTrader (project scope)
 ```
 
 ## เพิ่มทฤษฎีใหม่ (งานที่ผู้ใช้จะขอบ่อยที่สุด)
@@ -26,9 +28,41 @@ tools/sync-cbot.ps1          ก๊อปซอร์สไป Documents\cAlgo\S
 3. ทางเลือก: `ShouldExit(Position)`, `ExitOnOppositeSignal`
 4. ห้ามแก้ตรรกะทฤษฎีเดิมโดยไม่เพิ่ม `Version` (ผลเก่าผูกกับเวอร์ชันเดิมในฐานข้อมูล)
 5. หลีกเลี่ยง look-ahead: ห้ามใช้ `.LastValue` ของแท่งที่ยังไม่ปิดในการตัดสินใจ
-6. ถ้าเครื่องผู้ใช้ต่ออยู่: รัน `tools\sync-cbot.ps1` แล้วบอกผู้ใช้ให้กด Build + ตั้งค่า backtest
-   (Claude สั่ง backtest ใน cTrader เองไม่ได้ เว้นแต่มี cTrader CLI ในเครื่อง)
-7. แนะนำผู้ใช้ให้ `git commit` + `git push` เพื่อใช้บนเครื่องอื่น
+6. Build + backtest: ถ้าเครื่องมี cTrader CLI ให้ใช้ `tools\backtest.ps1 -Build ...` (ดูหัวข้อถัดไป)
+   ถ้าไม่มี ให้รัน `tools\sync-cbot.ps1` แล้วบอกผู้ใช้ให้กด Build + ตั้งค่า backtest ใน cTrader เอง
+7. แนะนำผู้ใช้ให้ `git commit` + `git push` เพื่อใช้บนเครื่องอื่น (ถามผู้ใช้ก่อนทุกครั้ง)
+8. cAlgo.API มีชนิดชื่อซ้ำกับ .NET (`File`, `HttpMethod`) — ถ้าใช้ `System.IO` / `System.Net.Http` ให้ใส่ `using X = ...;` กำกับ
+9. จัดรูปแบบวันที่/ตัวเลขเป็นข้อความต้องใส่ `CultureInfo.InvariantCulture` เสมอ (เครื่องภาษาไทยจะได้ปี พ.ศ.)
+
+## รัน backtest ผ่าน cTrader CLI
+
+ต้องมี `ctrader-cli` ใน PATH และไฟล์ตั้งค่าต่อเครื่อง `Documents\BacktestLab\cli.json` (ไม่อยู่ใน repo; ครั้งแรกสคริปต์จะถามแล้วสร้างให้):
+
+```json
+{ "ctidFile": "<ไฟล์ที่เก็บ cTID>", "pwdFile": "<ไฟล์รหัสผ่าน>", "account": "<เลขบัญชี Demo>" }
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\backtest.ps1 -Strategy EMA_CROSS -Symbol EURUSD -Period h1 `
+    -Start "01/01/2025 00:00" -End "30/06/2025 00:00" -P1 9 -P2 21
+# ตัวเลือก: -P3 -P4 -Lots -StopLossPips -TakeProfitPips -Balance -DataMode (ticks|m1|open) -Note -TimeoutMinutes
+# -Build = sync ซอร์สจาก repo + build .algo ก่อนรัน (ใช้ทุกครั้งที่แก้ไฟล์ใน cbot/)
+```
+
+- สำเร็จเมื่อเห็น `Sent to lab: {"ok":true,"runId":N,...,"driveError":null}` (exit code 0; 2 = ไม่ยืนยันว่าส่งถึง lab)
+- log เต็มอยู่ที่ `Documents\BacktestLab\logs\`
+- วันที่เป็น `dd/MM/yyyy HH:mm` (UTC) และวัน `-End` ถูกนับรวมทั้งวัน
+- ค่าเริ่มต้นของ CLI คือ commission = 0 ผลจึงดีกว่าความจริงเล็กน้อย
+- ห้ามเปิดอ่านไฟล์รหัสผ่าน ให้ส่งเป็น `--pwd-file=<ที่อยู่>` เท่านั้น และใช้บัญชี Demo เท่านั้น
+- `ctrader-cli` บางครั้งไม่ปิดตัวเองหลัง backtest จบ สคริปต์จึงปิดให้เมื่อเห็นว่า cBot หยุดแล้ว — อย่าเรียก `ctrader-cli backtest` ตรงๆ โดยไม่มี timeout
+- ห้ามใช้คำสั่งเทรดของ CLI (`order ...`, `position ...`, `run`) ใช้ได้แค่ `backtest`, `build`, `metadata`
+- ชื่อพารามิเตอร์ของ cBot ดูได้จาก `ctrader-cli metadata <BacktestLab.algo>` (ไฟล์อยู่ที่ `Documents\cAlgo\Sources\Robots\BacktestLab.algo`)
+
+## cTrader MCP
+
+`.mcp.json` ใน repo เชื่อม MCP server ของ cTrader Desktop ที่ `http://127.0.0.1:9876/mcp/`
+ใช้ได้เมื่อ: cTrader เปิดและล็อกอินอยู่, Settings → MCP Server → Enable (ไม่เปิด Allow trading), และเปิด Claude ในโฟลเดอร์ repo แล้วอนุมัติใน `/mcp`
+ใช้สำหรับอ่านข้อมูล (บัญชี, symbol, ราคา) เท่านั้น ห้ามส่งคำสั่งเทรด — การรัน backtest ให้ใช้ `tools\backtest.ps1`
 
 ## วิเคราะห์ผลที่มีอยู่
 

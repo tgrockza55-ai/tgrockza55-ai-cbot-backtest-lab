@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using cAlgo.API;
 using cAlgo.API.Internals;
@@ -176,7 +177,9 @@ namespace cAlgo.Robots
             };
         }
 
-        private static string Iso(DateTime t) => DateTime.SpecifyKind(t, DateTimeKind.Utc).ToString("yyyy-MM-ddTHH:mm:ssZ");
+        // InvariantCulture: เครื่องที่ตั้งภาษาไทยจะได้ปี พ.ศ. ถ้าไม่ระบุ
+        private static string Iso(DateTime t) =>
+            DateTime.SpecifyKind(t, DateTimeKind.Utc).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
         private static double Round(double v) => Math.Round(v, 2);
     }
 

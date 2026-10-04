@@ -11,6 +11,9 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using cAlgo.API;
+// cAlgo.API มี File / HttpMethod ชื่อซ้ำกับ .NET — ระบุให้ใช้ของ .NET
+using File = System.IO.File;
+using HttpMethod = System.Net.Http.HttpMethod;
 
 namespace cAlgo.Robots
 {
@@ -116,7 +119,7 @@ namespace cAlgo.Robots
             try
             {
                 Directory.CreateDirectory(PendingFolder);
-                var file = Path.Combine(PendingFolder, DateTime.UtcNow.ToString("yyyyMMdd-HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 6) + ".json");
+                var file = Path.Combine(PendingFolder, DateTime.UtcNow.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N").Substring(0, 6) + ".json");
                 File.WriteAllText(file, json);
                 bot.Print("Saved for retry: {0}", file);
             }
