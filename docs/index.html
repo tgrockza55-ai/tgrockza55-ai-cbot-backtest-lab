@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Backtest Lab · ผลทดสอบ</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>ผลทดสอบทั้งหมด</h1>
+  <p class="muted">ทุกรอบที่ cBot ส่งขึ้นมา คลิกแถวเพื่อดูทฤษฎี กราฟ equity และรายการเทรด</p>
+  <div class="toolbar">
+    <select id="f-strategy" aria-label="กรองตามทฤษฎี"><option value="">ทุกทฤษฎี</option></select>
+    <select id="f-symbol" aria-label="กรองตาม symbol"><option value="">ทุก symbol</option></select>
+    <input id="f-text" type="search" placeholder="ค้นหาโน้ต / เครื่อง" aria-label="ค้นหา">
+    <span class="count" id="count"></span>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr id="head"></tr></thead>
+    <tbody id="rows"><tr><td class="empty">กำลังโหลด…</td></tr></tbody>
+  </table></div>
+</main>
+<script type="module">
+import { sb, requireSession, h, $, money, pct, num, dateTime, date, signClass, showError } from "./app.js";
+
+const COLS = [
+  { key: "created_at", label: "ส่งเมื่อ", fmt: dateTime },
+  { key: "strategy", label: "ทฤษฎี", fmt: (s) => s ? `${s.name} v${s.version}` : "–", sort: (r) => r.strategy?.name ?? "" },
+  { key: "symbol", label: "Symbol · TF", fmt: (_, r) => `${r.symbol} · ${r.timeframe}` },
+  { key: "date_from", label: "ช่วงข้อมูล", fmt: (_, r) => `${date(r.date_from)} – ${date(r.date_to)}` },
+  { key: "net_profit", label: "Net", num: true, fmt: money, cls: signClass },
+  { key: "win_rate", label: "Win", num: true, fmt: pct },
+  { key: "profit_factor", label: "PF", num: true, fmt: num },
+  { key: "max_dd_pct", label: "Max DD", num: true, fmt: pct },
+  { key: "total_trades", label: "เทรด", num: true, fmt: (v) => v ?? "–" },
+  { key: "note", label: "โน้ต", fmt: (v) => v ?? "" },
+];
+
+let runs = [], sortKey = "created_at", asc = false;
+
+function render() {
+  const fs = $("#f-strategy").value, fy = $("#f-symbol").value, ft = $("#f-text").value.trim().toLowerCase();
+  const col = COLS.find((c) => c.key === sortKey);
+  const val = (r) => (col.sort ? col.sort(r) : r[sortKey]) ?? -Infinity;
+  const list = runs
+    .filter((r) => !fs || String(r.strategy?.id) === fs)
+    .filter((r) => !fy || r.symbol === fy)
+    .filter((r) => !ft || `${r.note ?? ""} ${r.machine ?? ""}`.toLowerCase().includes(ft))
+    .sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * (asc ? 1 : -1));
+
+  $("#head").replaceChildren(...COLS.map((c) => h("th", {
+    class: ["sortable", c.num && "num", c.key === sortKey && "sorted", c.key === sortKey && asc && "asc"].filter(Boolean).join(" "),
+    onclick: () => { asc = sortKey === c.key ? !asc : false; sortKey = c.key; render(); },
+  }, c.label)));
+
+  $("#count").textContent = `${list.length} จาก ${runs.length} รอบ`;
+  $("#rows").replaceChildren(...(list.length ? list.map((r) => h("tr", {
+    class: "link", tabindex: 0,
+    onclick: () => location.href = `run.html?id=${r.id}`,
+    onkeydown: (e) => e.key === "Enter" && (location.href = `run.html?id=${r.id}`),
+  }, COLS.map((c) => h("td", { class: [c.num && "num", c.cls?.(r[c.key])].filter(Boolean).join(" ") }, c.fmt(r[c.key], r)))))
+    : [h("tr", {}, h("td", { colspan: COLS.length, class: "empty" }, "ยังไม่มีผลทดสอบ — รัน backtest ใน cTrader แล้วผลจะขึ้นที่นี่"))]));
+}
+
+const session = await requireSession();
+if (session) {
+  try {
+    const { data, error } = await sb.from("backtest_runs")
+      .select("*, strategy:strategies(id, code, version, name)")
+      .order("created_at", { ascending: false }).limit(2000);
+    if (error) throw error;
+    runs = data;
+
+    const strategies = [...new Map(runs.filter((r) => r.strategy).map((r) => [r.strategy.id, r.strategy])).values()];
+    $("#f-strategy").append(...strategies.map((s) => h("option", { value: s.id }, `${s.name} v${s.version}`)));
+    $("#f-symbol").append(...[...new Set(runs.map((r) => r.symbol))].sort().map((s) => h("option", { value: s }, s)));
+    ["#f-strategy", "#f-symbol", "#f-text"].forEach((id) => $(id).addEventListener("input", render));
+    render();
+
+    if (!runs.length) {
+      $("main").append(h("p", { class: "notice" },
+        "ตั้งค่าครั้งแรก: user id ของคุณคือ ", h("code", {}, session.user.id),
+        " — นำไปใส่ secret OWNER_ID ของ Edge Function (ดู SETUP.md ขั้นที่ 5)"));
+    }
+  } catch (e) { showError(e); }
+}
+</script>
+</body>
+</html>

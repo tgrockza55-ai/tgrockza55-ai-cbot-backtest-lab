@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Backtest Lab · คลังทฤษฎี</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>คลังทฤษฎี</h1>
+  <p class="muted">ทุกทฤษฎีที่เคยรัน แยกตามเวอร์ชัน — ทฤษฎีใหม่จะขึ้นที่นี่อัตโนมัติเมื่อ cBot ส่งผลครั้งแรก</p>
+  <div class="grid two" id="list" style="margin-top:16px"><p class="muted">กำลังโหลด…</p></div>
+</main>
+<script type="module">
+import { sb, requireSession, h, $, money, pct, dateTime, signClass, showError } from "./app.js";
+
+function card(s, st) {
+  const ta = h("textarea", { "aria-label": `โน้ตของ ${s.name}`, placeholder: "ข้อสังเกต สิ่งที่อยากลองต่อ…" });
+  ta.value = s.notes ?? "";
+  const status = h("span", { class: "muted" });
+  return h("section", { class: "card theory" },
+    h("div", { class: "name" }, s.name),
+    h("div", { class: "code" }, `${s.code} · version ${s.version}`),
+    s.theory && h("p", {}, s.theory),
+    h("h3", {}, "เข้าเมื่อ"), h("ol", {}, (s.entry_rules ?? []).map((r) => h("li", {}, r))),
+    h("h3", {}, "ออกเมื่อ"), h("ul", {}, (s.exit_rules ?? []).map((r) => h("li", {}, r))),
+    (s.param_names ?? []).length > 0 && [h("h3", {}, "พารามิเตอร์ (P1–P4)"),
+      h("div", { class: "chips" }, s.param_names.map((n, i) => h("span", { class: "chip" }, `P${i + 1} = `, h("b", {}, n))))],
+    h("h3", {}, "ผลรวม"),
+    st && st.runs > 0
+      ? h("div", { class: "chips" },
+          h("span", { class: "chip" }, "รัน ", h("b", {}, st.runs), " รอบ"),
+          h("span", { class: `chip ${signClass(st.avg_net_profit)}` }, "เฉลี่ย ", h("b", {}, money(st.avg_net_profit))),
+          h("span", { class: `chip ${signClass(st.best_net_profit)}` }, "ดีสุด ", h("b", {}, money(st.best_net_profit))),
+          h("span", { class: "chip" }, "Win ", h("b", {}, pct(st.avg_win_rate))),
+          h("span", { class: "chip" }, "DD ", h("b", {}, pct(st.avg_max_dd_pct))),
+          h("span", { class: "chip" }, "ล่าสุด ", h("b", {}, dateTime(st.last_run_at))))
+      : h("p", { class: "muted" }, "ยังไม่มีผล"),
+    h("h3", {}, "โน้ต"), ta,
+    h("div", { class: "toolbar" }, h("button", {
+      onclick: async () => {
+        const { error } = await sb.from("strategies").update({ notes: ta.value || null }).eq("id", s.id);
+        status.textContent = error ? `บันทึกไม่ได้: ${error.message}` : "บันทึกแล้ว";
+      },
+    }, "บันทึกโน้ต"), status),
+  );
+}
+
+const session = await requireSession();
+if (session) {
+  try {
+    const [{ data: strategies, error: e1 }, { data: stats, error: e2 }] = await Promise.all([
+      sb.from("strategies").select("*").order("code").order("version", { ascending: false }),
+      sb.from("strategy_stats").select("*"),
+    ]);
+    if (e1 || e2) throw e1 ?? e2;
+    const byId = new Map(stats.map((s) => [s.id, s]));
+    $("#list").replaceChildren(...(strategies.length
+      ? strategies.map((s) => card(s, byId.get(s.id)))
+      : [h("p", { class: "empty" }, "ยังไม่มีทฤษฎี — รัน backtest ครั้งแรกแล้วจะขึ้นที่นี่")]));
+  } catch (e) { showError(e); }
+}
+</script>
+</body>
+</html>

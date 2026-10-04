@@ -1,0 +1,3 @@
+# ใช้เฉพาะถ้า deploy ด้วย Supabase CLI: supabase functions deploy lab
+[functions.lab]
+verify_jwt = false

@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Backtest Lab · รายละเอียดรอบทดสอบ</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="stack" id="main"><p class="muted">กำลังโหลด…</p></main>
+<script type="module">
+import Chart from "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/auto/+esm";
+import { sb, requireSession, labApi, h, $, money, pct, num, date, dateTime, signClass, describe, showError } from "./app.js";
+
+const id = Number(new URLSearchParams(location.search).get("id"));
+const stat = (label, value, cls = "") => h("div", { class: "stat" }, h("div", { class: "label" }, label), h("div", { class: `value ${cls}` }, value));
+
+function theoryCard(run) {
+  const s = run.strategy ?? {};
+  const params = run.params ?? {};
+  return h("section", { class: "card theory" },
+    h("h2", {}, "ทฤษฎีที่ใช้ในรอบนี้"),
+    h("div", { class: "name" }, s.name ?? "–"),
+    h("div", { class: "code" }, `${s.code} · version ${s.version}`),
+    s.theory && h("p", {}, s.theory),
+    h("h3", {}, "เข้าเมื่อ"), h("ol", {}, (s.entry_rules ?? []).map((r) => h("li", {}, describe(r, params)))),
+    h("h3", {}, "ออกเมื่อ"), h("ul", {}, (s.exit_rules ?? []).map((r) => h("li", {}, describe(r, params)))),
+    h("h3", {}, "ค่าที่ตั้ง"), h("div", { class: "chips" },
+      Object.entries(params).map(([k, v]) => h("span", { class: "chip" }, `${k} `, h("b", {}, v)))),
+    s.notes && [h("h3", {}, "โน้ตของทฤษฎี"), h("p", {}, s.notes)],
+  );
+}
+
+function noteCard(run) {
+  const ta = h("textarea", { "aria-label": "โน้ตของรอบนี้" });
+  ta.value = run.note ?? "";
+  const status = h("span", { class: "muted" });
+  return h("section", { class: "card" },
+    h("h2", {}, "โน้ตของรอบนี้"),
+    ta,
+    h("div", { class: "toolbar" },
+      h("button", {
+        onclick: async () => {
+          const { error } = await sb.from("backtest_runs").update({ note: ta.value || null }).eq("id", run.id);
+          status.textContent = error ? `บันทึกไม่ได้: ${error.message}` : "บันทึกแล้ว";
+        },
+      }, "บันทึกโน้ต"), status),
+    h("p", { class: "muted" }, `เครื่อง: ${run.machine ?? "–"} · โหมด: ${run.running_mode ?? "–"} · ส่งเมื่อ ${dateTime(run.created_at)}`),
+  );
+}
+
+function equityChart(canvas, points, startBalance) {
+  const css = getComputedStyle(document.documentElement);
+  const accent = css.getPropertyValue("--accent").trim(), grid = css.getPropertyValue("--border").trim(), muted = css.getPropertyValue("--muted").trim();
+  new Chart(canvas, {
+    type: "line",
+    data: {
+      datasets: [
+        { label: "Equity", data: points.map(([t, y]) => ({ x: t * 1000, y })), borderColor: accent, borderWidth: 1.5, pointRadius: 0, tension: 0 },
+        { label: "ทุนเริ่มต้น", data: points.length ? [{ x: points[0][0] * 1000, y: startBalance }, { x: points.at(-1)[0] * 1000, y: startBalance }] : [],
+          borderColor: muted, borderDash: [4, 4], borderWidth: 1, pointRadius: 0 },
+      ],
+    },
+    options: {
+      maintainAspectRatio: false, animation: false, parsing: false, normalized: true,
+      interaction: { mode: "index", intersect: false },
+      scales: {
+        x: { type: "linear", grid: { color: grid }, ticks: { color: muted, maxTicksLimit: 8, callback: (v) => date(v) } },
+        y: { grid: { color: grid }, ticks: { color: muted } },
+      },
+      plugins: {
+        legend: { labels: { color: muted, boxWidth: 12 } },
+        tooltip: { callbacks: { title: (items) => dateTime(items[0].parsed.x), label: (i) => ` ${i.dataset.label}: ${money(i.parsed.y)}` } },
+      },
+    },
+  });
+}
+
+function tradesTable(trades) {
+  const shown = trades.slice(-1000);
+  return h("section", { class: "stack" },
+    h("h2", {}, `รายการเทรด (${trades.length})`),
+    trades.length > shown.length && h("p", { class: "muted" }, `แสดง ${shown.length} รายการล่าสุด`),
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, ["#", "ฝั่ง", "เข้า", "ออก", "ราคาเข้า", "ราคาออก", "Pips", "Net"].map((t, i) =>
+        h("th", { class: i >= 4 ? "num" : null }, t)))),
+      h("tbody", {}, shown.map((t, i) => h("tr", {},
+        h("td", { class: "num" }, trades.length - shown.length + i + 1),
+        h("td", {}, t.side),
+        h("td", { class: "mono" }, dateTime(t.entryTime)),
+        h("td", { class: "mono" }, dateTime(t.exitTime)),
+        h("td", { class: "num" }, t.entryPrice),
+        h("td", { class: "num" }, t.exitPrice),
+        h("td", { class: `num ${signClass(t.pips)}` }, num(t.pips)),
+        h("td", { class: `num ${signClass(t.net)}` }, money(t.net)),
+      ))),
+    )),
+  );
+}
+
+const session = await requireSession();
+if (session) {
+  const main = $("#main");
+  try {
+    const { data: run, error } = await sb.from("backtest_runs")
+      .select("*, strategy:strategies(*)").eq("id", id).maybeSingle();
+    if (error) throw error;
+    if (!run) { main.replaceChildren(h("p", { class: "empty" }, "ไม่พบรอบทดสอบนี้")); throw null; }
+
+    document.title = `Backtest Lab · #${run.id} ${run.strategy?.name ?? ""}`;
+    const canvas = h("canvas", { "aria-label": "กราฟ equity" });
+    const fileArea = h("div", { class: "stack" }, h("p", { class: "muted" }, "กำลังโหลดรายการเทรดจาก Google Drive…"));
+
+    main.replaceChildren(
+      h("p", {}, h("a", { href: "index.html" }, "← ผลทดสอบทั้งหมด")),
+      h("div", {},
+        h("h1", {}, `#${run.id} · ${run.strategy?.name ?? ""} · ${run.symbol} ${run.timeframe}`),
+        h("p", { class: "muted" }, `ข้อมูล ${date(run.date_from)} – ${date(run.date_to)}`)),
+      h("div", { class: "stats" },
+        stat("Net profit", money(run.net_profit), signClass(run.net_profit)),
+        stat("ทุน เริ่ม → จบ", `${money(run.start_balance)} → ${money(run.end_balance)}`),
+        stat("Win rate", pct(run.win_rate)),
+        stat("Profit factor", num(run.profit_factor)),
+        stat("Max drawdown", pct(run.max_dd_pct)),
+        stat("จำนวนเทรด", run.total_trades ?? "–")),
+      h("div", { class: "grid two" }, theoryCard(run), noteCard(run)),
+      h("section", { class: "card" }, h("h2", {}, "Equity"), h("div", { class: "chart-box" }, canvas)),
+      fileArea,
+    );
+
+    if (!run.drive_file_id) {
+      fileArea.replaceChildren(h("p", { class: "notice" }, `ไม่มีไฟล์รายละเอียดใน Drive${run.drive_error ? `: ${run.drive_error}` : ""}`));
+    } else {
+      const file = await labApi(`/runs/${run.id}/file`);
+      equityChart(canvas, file.equity ?? [], run.start_balance);
+      fileArea.replaceChildren(tradesTable(file.trades ?? []));
+    }
+  } catch (e) { if (e) showError(e); }
+}
+</script>
+</body>
+</html>
