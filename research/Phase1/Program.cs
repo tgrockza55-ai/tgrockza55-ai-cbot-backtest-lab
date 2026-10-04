@@ -39,6 +39,72 @@ static class Phase1
     static float[][] X;          // [feature][bar]
     static bool[] Valid;
 
+    // ---- news / macro layer (tools\news-fetch.ps1 -> Documents\BacktestLab\data\news) ----
+    static float[][] Active;     // feature columns the model may use in the current run (base only, or base + news)
+    static int BaseCount;        // number of price/volume features; the columns after them are the news/macro features
+    static bool HasNews;
+    static long[] EvT; static byte[] EvLevel; static string[] EvCode;      // scheduled releases, UTC; level 0 medium, 1 high, 2 extreme
+    static int[] MacroDay; static double[][] MacroV;                       // business days (unix day number) x series, forward filled
+    static byte[] Window;        // where a bar sits relative to the nearest HIGH/EXTREME release
+    static readonly string[] WindowNames = { "none", "before30", "after0to5", "after5to30", "after30to120" };
+
+    static bool LoadNews(string docs)
+    {
+        var dir = Path.Combine(docs, "BacktestLab", "data", "news");
+        var ev = Path.Combine(dir, "events.csv");
+        if (!File.Exists(ev)) return false;
+        var rows = File.ReadAllLines(ev).Skip(1).Select(l => l.Split(',')).Where(p => p.Length >= 3)
+            .Select(p => (t: long.Parse(p[0], Inv), code: p[1], level: (byte)(p[2] == "EXTREME" ? 2 : p[2] == "HIGH" ? 1 : 0)))
+            .OrderBy(r => r.t).ToArray();
+        EvT = rows.Select(r => r.t).ToArray(); EvCode = rows.Select(r => r.code).ToArray(); EvLevel = rows.Select(r => r.level).ToArray();
+
+        var macro = Path.Combine(dir, "macro.csv");
+        if (File.Exists(macro))
+        {
+            var days = new List<int>(); var vals = new List<double[]>(); double[] last = null;
+            foreach (var line in File.ReadAllLines(macro).Skip(1))
+            {
+                var p = line.Split(',');
+                if (p.Length < 7 || p[2].Length == 0) continue;              // keep business days (10-year yield published)
+                var v = new double[6];
+                for (int s = 0; s < 6; s++) v[s] = p[s + 1].Length > 0 ? double.Parse(p[s + 1], Inv) : (last != null ? last[s] : double.NaN);
+                var d = DateTime.ParseExact(p[0], "yyyy-MM-dd", Inv, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal);
+                days.Add((int)(new DateTimeOffset(d).ToUnixTimeSeconds() / 86400)); vals.Add(v); last = v;
+            }
+            MacroDay = days.ToArray(); MacroV = vals.ToArray();
+        }
+        return true;
+    }
+
+    /// <summary>How much bigger than usual is the 5-minute range right after each kind of release? (sanity check of the event times)</summary>
+    static string EventStudy()
+    {
+        var parts = new List<string>();
+        foreach (var g in Enumerable.Range(0, EvT.Length).GroupBy(j => EvCode[j]).OrderByDescending(g => EvLevel[g.First()]).ThenBy(g => g.Key))
+        {
+            double sum = 0; int n = 0;
+            foreach (var j in g)
+            {
+                int i = LowerBound(EvT[j]);
+                if (i < 70 || i + 5 >= T.Length || T[i] - EvT[j] > 120) continue;        // market closed at that time
+                double hi = double.MinValue, lo = double.MaxValue;
+                for (int q = i; q < i + 5; q++) { hi = Math.Max(hi, H[q]); lo = Math.Min(lo, L[q]); }
+                double usual = 0;
+                for (int w = 1; w <= 12; w++)
+                {
+                    double a = double.MinValue, b = double.MaxValue;
+                    for (int q = i - 5 * w; q < i - 5 * w + 5; q++) { a = Math.Max(a, H[q]); b = Math.Min(b, L[q]); }
+                    usual += a - b;
+                }
+                if (usual > 0) { sum += (hi - lo) / (usual / 12); n++; }
+            }
+            var level = EvLevel[g.First()] == 2 ? "EXTREME" : EvLevel[g.First()] == 1 ? "HIGH" : "MEDIUM";
+            Console.WriteLine($"  {g.Key,-7} {level,-8} events in data {n,4}   5-min range after release = {(n > 0 ? sum / n : 0):N2} x the usual 5-min range of the hour before");
+            parts.Add("{\"code\":\"" + g.Key + "\",\"impact\":\"" + level + "\",\"n\":" + n + ",\"rangeRatio\":" + F(n > 0 ? sum / n : double.NaN) + "}");
+        }
+        return string.Join(",", parts);
+    }
+
     static int Main(string[] args)
     {
         var docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
@@ -51,23 +117,31 @@ static class Phase1
 
         Load(csv);
         Console.WriteLine($"bars: {T.Length:N0}  {Date(T[0])} .. {Date(T[T.Length - 1])}   cost per trade: {FixedCost} + {CommissionRate * 1e6:N0} per million round trip (= {Cost(0):N3} at {C[0]:N0}, {Cost(T.Length - 1):N3} at {C[T.Length - 1]:N0})");
+        HasNews = LoadNews(docs);
         BuildFeatures();
-        Console.WriteLine($"features: {FeatureNames.Length}");
+        Console.WriteLine($"features: {BaseCount} price/volume" + (HasNews ? $" + {FeatureNames.Length - BaseCount} news/macro ({EvT.Length} scheduled releases, {MacroDay?.Length ?? 0} macro days)" : "  (no news cache: run tools\\news-fetch.ps1)"));
+        var eventJson = "";
+        if (HasNews) { Console.WriteLine("release-time check:"); eventJson = EventStudy(); }
 
         var months = MonthStarts();
         var json = new StringBuilder();
         json.Append("{\"symbol\":\"").Append(symbol).Append("\",\"fixedCost\":").Append(F(FixedCost)).Append(",\"commissionRoundTripPerMillion\":").Append(F(CommissionRate * 1e6))
             .Append(",\"trainMonths\":").Append(TrainMonths)
             .Append(",\"from\":\"").Append(Date(months[TrainMonths])).Append("\",\"to\":\"").Append(Date(T[T.Length - 1]))
-            .Append("\",\"features\":[").Append(string.Join(",", FeatureNames.Select(n => "\"" + n + "\""))).Append("],\"horizons\":[");
+            .Append("\",\"features\":[").Append(string.Join(",", FeatureNames.Select(n => "\"" + n + "\""))).Append("],\"baseFeatures\":").Append(BaseCount)
+            .Append(",\"hasNews\":").Append(HasNews ? "true" : "false").Append(",\"events\":[").Append(eventJson).Append("],\"horizons\":[");
 
         var first = true;
         foreach (var h in Horizons)
         {
-            var res = WalkForward(h, months);
+            // same walk-forward twice: price/volume features only, then with the news/macro layer added
+            Active = X.Take(BaseCount).ToArray();
+            var baseRes = WalkForward(h, months);
+            var res = baseRes;
+            if (HasNews) { Active = X; res = WalkForward(h, months); }
             if (!first) json.Append(',');
             first = false;
-            Report(h, res, cost, json);
+            Report(h, res, cost, json, HasNews ? baseRes : null);
         }
         json.Append("]}");
 
@@ -226,6 +300,58 @@ static class Phase1
         Add("ret1xVol", i => Ret(i, 1) * (vStd[i] > 0 ? (V[i] - vMean[i]) / vStd[i] : 0));
         Add("streak", i => { int s = 0, d = Math.Sign(C[i] - O[i]); if (d == 0) return 0; for (int j = i; j > i - 10 && Math.Sign(C[j] - O[j]) == d; j--) s++; return d * s; });
 
+        // ---- news / macro layer: only information that was known at bar close ----
+        BaseCount = names.Count;
+        Window = new byte[n];
+        if (HasNews)
+        {
+            // minutes from bar close to the next scheduled release / since the last one; [0] = HIGH + EXTREME, [1] = EXTREME only
+            var toNext = new float[2][]; var since = new float[2][];
+            for (int c = 0; c < 2; c++)
+            {
+                toNext[c] = new float[n]; since[c] = new float[n];
+                var ev = Enumerable.Range(0, EvT.Length).Where(j => EvLevel[j] >= c + 1).Select(j => EvT[j]).ToArray();
+                int e = 0;
+                for (int i = 0; i < n; i++)
+                {
+                    long now = T[i] + 60;
+                    while (e < ev.Length && ev[e] < now) e++;
+                    toNext[c][i] = e < ev.Length ? Math.Min(100000f, (ev[e] - now) / 60f) : 100000f;
+                    since[c][i] = e > 0 ? Math.Min(100000f, (now - ev[e - 1]) / 60f) : 100000f;
+                }
+            }
+            double Near(float minutes, double span) => Math.Max(0, 1 - minutes / span);
+            Add("newsAhead30", i => Near(toNext[0][i], 30)); Add("newsAhead120", i => Near(toNext[0][i], 120));
+            Add("newsAfter15", i => Near(since[0][i], 15)); Add("newsAfter120", i => Near(since[0][i], 120));
+            Add("extremeAhead120", i => Near(toNext[1][i], 120)); Add("extremeAfter120", i => Near(since[1][i], 120));
+            Add("extremeToday", i => toNext[1][i] <= 720 ? 1 : 0);
+            Add("newsAfterXret5", i => Near(since[0][i], 120) * Ret(i, 5)); Add("newsAfterXret15", i => Near(since[0][i], 120) * Ret(i, 15));
+            for (int i = 0; i < n; i++)
+            {
+                float a = toNext[0][i], s = since[0][i];
+                Window[i] = (byte)(s < 5 ? 2 : s < 30 ? 3 : a <= 30 ? 1 : s < 120 ? 4 : 0);
+            }
+
+            if (MacroDay != null)
+            {
+                // a daily value is used from two calendar days after its date (FRED publishes yields the next business day)
+                var mi = new int[n]; int m = -1;
+                for (int i = 0; i < n; i++)
+                {
+                    int day = (int)(T[i] / 86400) - 2;
+                    while (m + 1 < MacroDay.Length && MacroDay[m + 1] <= day) m++;
+                    mi[i] = m;
+                }
+                double Chg(int i, int s, int back) => mi[i] >= back ? MacroV[mi[i]][s] - MacroV[mi[i] - back][s] : 0;
+                double Pct(int i, int s, int back) => mi[i] >= back && MacroV[mi[i] - back][s] > 0 ? 100 * (MacroV[mi[i]][s] / MacroV[mi[i] - back][s] - 1) : 0;
+                Add("realYieldChg1", i => Chg(i, 0, 1)); Add("realYieldChg5", i => Chg(i, 0, 5));
+                Add("yield10Chg1", i => Chg(i, 1, 1)); Add("yield10Chg5", i => Chg(i, 1, 5));
+                Add("curve10y2y", i => mi[i] >= 0 ? MacroV[mi[i]][1] - MacroV[mi[i]][2] : 0);
+                Add("breakevenChg5", i => Chg(i, 3, 5));
+                Add("dollarChg1", i => Pct(i, 4, 1)); Add("dollarChg5", i => Pct(i, 4, 5));
+            }
+        }
+
         FeatureNames = names.ToArray(); X = cols.ToArray();
         Valid = new bool[n];
         for (int i = Warmup; i < n; i++) Valid[i] = !double.IsNaN(pdh[i]) && atr60[i] > 0;
@@ -252,6 +378,7 @@ static class Phase1
 
     static List<Pred> WalkForward(int h, List<long> months)
     {
+        var X = Active;                                                     // the feature set of this run
         int n = T.Length, k = X.Length;
         // usable sample: features valid and the bar h steps ahead is exactly h minutes later (no gap in between)
         var move = new float[n]; var ok = new bool[n];
@@ -348,7 +475,24 @@ static class Phase1
     static int Bucket(float p) { double c = p >= 0.5 ? p : 1 - p; int b = 0; while (b < Edges.Length && c >= Edges[b]) b++; return b; }
     static string BucketName(int b) => b == 0 ? "50-52" : b == Edges.Length ? $"{Edges[b - 1] * 100:0}+" : $"{Edges[b - 1] * 100:0}-{Edges[b] * 100:0}";
 
-    static void Report(int h, List<Pred> preds, double cost, StringBuilder json)
+    /// <summary>Non-overlapping trades: enter at confidence >= th when the bar's news window is allowed, hold h minutes. Returns n, wins, grossWin, grossLoss.</summary>
+    static double[] Sim(List<Pred> preds, int h, double th, Func<byte, bool> allow)
+    {
+        var a = new double[4]; long freeAt = 0;
+        foreach (var p in preds)
+        {
+            double conf = p.P >= 0.5 ? p.P : 1 - p.P;
+            if (conf < th || T[p.Bar] < freeAt || !allow(Window[p.Bar])) continue;
+            freeAt = T[p.Bar] + h * 60L;
+            double pnl = (p.P >= 0.5 ? p.Move : -p.Move) - Cost(p.Bar);
+            a[0]++; if (pnl > 0) { a[1]++; a[2] += pnl; } else a[3] -= pnl;
+        }
+        return a;
+    }
+    static string SimJson(double[] a) => "{\"n\":" + a[0] + ",\"wins\":" + a[1] + ",\"grossWin\":" + F(a[2]) + ",\"grossLoss\":" + F(a[3]) + "}";
+    static string SimLine(double[] a) => a[0] == 0 ? "n 0" : $"n {a[0]:N0} win {100 * a[1] / a[0]:N1}% PF {(a[3] > 0 ? a[2] / a[3] : 0):N2} net {a[2] - a[3]:N0}";
+
+    static void Report(int h, List<Pred> preds, double cost, StringBuilder json, List<Pred> basePreds = null)
     {
         int nb = Edges.Length + 1;
         var all = new Acc(); var buckets = Enumerable.Range(0, nb).Select(_ => new Acc()).ToArray();
@@ -436,6 +580,35 @@ static class Phase1
         json.Append("],\"years\":[").Append(string.Join(",", byYear.Select(kv => "{\"year\":" + kv.Key + ",\"all\":" + kv.Value.Json(cost) + ",\"confident\":" + byYearHi[kv.Key].Json(cost) + "}")));
         json.Append("],\"regimes\":[").Append(string.Join(",", RegimeNames.Select((nm, r) => "{\"name\":\"" + nm + "\",\"all\":" + byReg[r].Json(cost) + ",\"confident\":" + byRegHi[r].Json(cost) + "}")));
         json.Append("],\"sessions\":[").Append(string.Join(",", SessionNames.Select((nm, s) => "{\"name\":\"" + nm + "\",\"all\":" + bySes[s].Json(cost) + ",\"confident\":" + bySesHi[s].Json(cost) + "}")));
-        json.Append("]}");
+        json.Append("]");
+
+        if (basePreds != null)
+        {
+            // 1) does the news layer make the model better? same walk-forward with and without it
+            var b = new Acc(); foreach (var p in basePreds) b.Add(p);
+            Console.WriteLine($"news layer: accuracy {b.Accuracy:N2}% -> {all.Accuracy:N2}%   brier {b.Brier / Math.Max(1, b.N):N5} -> {all.Brier / Math.Max(1, all.N):N5}");
+            var ths = new[] { 0.56, 0.58, 0.60, 0.62 };
+            foreach (var th in ths)
+                Console.WriteLine($"  trades >= {th * 100:0}%:  without news [{SimLine(Sim(basePreds, h, th, w => true))}]   with news [{SimLine(Sim(preds, h, th, w => true))}]");
+
+            // 2) how does the model do around releases, and what if we skip / only trade those windows?
+            var win = WindowNames.Select(_ => new Acc()).ToArray(); var winHi = WindowNames.Select(_ => new Acc()).ToArray();
+            foreach (var p in preds) { win[Window[p.Bar]].Add(p); if (Bucket(p.P) >= 3) winHi[Window[p.Bar]].Add(p); }
+            Console.WriteLine("around HIGH/EXTREME releases (model with news):");
+            for (int w = 0; w < WindowNames.Length; w++)
+                Console.WriteLine($"  {WindowNames[w],-13} n {win[w].N,9:N0}  acc {win[w].Accuracy,6:N2}%  |move| {win[w].AvgAbs,6:N3}   >=56%: n {winHi[w].N,7:N0} acc {winHi[w].Accuracy,6:N2}% EV {winHi[w].Ev,8:N4}");
+            foreach (var th in ths)
+                Console.WriteLine($"  trades >= {th * 100:0}%:  skip news windows [{SimLine(Sim(preds, h, th, w => w == 0))}]   only after a release (0-120m) [{SimLine(Sim(preds, h, th, w => w >= 2))}]   only before (30m) [{SimLine(Sim(preds, h, th, w => w == 1))}]");
+
+            json.Append(",\"news\":{\"base\":").Append(b.Json(cost)).Append(",\"windows\":[")
+                .Append(string.Join(",", WindowNames.Select((nm, w) => "{\"name\":\"" + nm + "\",\"all\":" + win[w].Json(cost) + ",\"confident\":" + winHi[w].Json(cost) + "}")))
+                .Append("],\"trades\":[")
+                .Append(string.Join(",", ths.Select(th => "{\"threshold\":" + F(th)
+                    + ",\"withoutNews\":" + SimJson(Sim(basePreds, h, th, w => true)) + ",\"withNews\":" + SimJson(Sim(preds, h, th, w => true))
+                    + ",\"skipNewsWindows\":" + SimJson(Sim(preds, h, th, w => w == 0)) + ",\"afterRelease\":" + SimJson(Sim(preds, h, th, w => w >= 2))
+                    + ",\"beforeRelease\":" + SimJson(Sim(preds, h, th, w => w == 1)) + "}")))
+                .Append("]}");
+        }
+        json.Append("}");
     }
 }

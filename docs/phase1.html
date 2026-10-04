@@ -51,6 +51,36 @@ function tradeRow(label, t) {
     h("td", { class: "muted" }, t.n > 0 && t.n < 100 ? "ตัวอย่างน้อย" : ""));
 }
 
+const WINDOWS = { none: "ช่วงปกติ (ไม่ใกล้ข่าว)", before30: "30 นาทีก่อนข่าว", after0to5: "0–5 นาทีหลังข่าว", after5to30: "5–30 นาทีหลังข่าว", after30to120: "30–120 นาทีหลังข่าว" };
+const IMPACT = { EXTREME: "สูงสุด", HIGH: "สูง", MEDIUM: "กลาง" };
+const simCells = (t) => {
+  const pf = t.grossLoss > 0 ? t.grossWin / t.grossLoss : null, net = t.grossWin - t.grossLoss;
+  return [h("td", { class: "num" }, n0(t.n)), h("td", { class: `num ${pf == null ? "" : sign(pf - 1)}` }, pf == null ? "–" : pf.toFixed(2)), h("td", { class: `num ${sign(net)}` }, n0(net))];
+};
+
+/** ชั้นข่าว: เวลาข่าวจาก FRED + ตารางประชุมของ Fed, macro รายวันจาก FRED */
+function newsSection(hz) {
+  const nw = hz.news, base = nw.base, all = hz.all;
+  return h("section", { class: "stack" },
+    h("h2", {}, "ชั้นข่าวและ macro ช่วยไหม"),
+    h("p", { class: "muted" }, `เพิ่ม feature ${data.features.length - data.baseFeatures} ตัว: ระยะเวลาก่อน/หลังข่าวแรงของสหรัฐ 9 ประเภท และการเปลี่ยนแปลงของ real yield, bond yield, ดัชนีดอลลาร์ (ใช้ค่าที่ล่าช้า 2 วัน) · แหล่งข้อมูล: FRED และตารางประชุมของ Fed · ไม่มีค่า forecast เทียบ actual ย้อนหลัง`),
+    table(["", "ไม่มีชั้นข่าว", "มีชั้นข่าว"], [
+      h("tr", {}, h("td", {}, "ทายถูก"), h("td", { class: "num" }, p2(base.accuracy)), h("td", { class: "num" }, p2(all.accuracy))),
+      h("tr", {}, h("td", {}, "Brier (ต่ำกว่า = ดีกว่า, 0.25 = เดา)"), h("td", { class: "num" }, base.brier.toFixed(5)), h("td", { class: `num ${all.brier > base.brier ? "neg" : "pos"}` }, all.brier.toFixed(5))),
+    ]),
+    h("h3", {}, "ผลเทรดไม่ซ้อนไม้ (หลังหักต้นทุน)"),
+    table(["เกณฑ์ความมั่นใจ", "ไม่มีข่าว: เทรด", "PF", "Net", "มีข่าว: เทรด", "PF", "Net", "เลี่ยงช่วงข่าว: เทรด", "PF", "Net", "เฉพาะหลังข่าว 0–120 น.: เทรด", "PF", "Net", "เฉพาะ 30 น. ก่อนข่าว: เทรด", "PF", "Net"],
+      nw.trades.map((t) => h("tr", {}, h("td", {}, `≥ ${Math.round(t.threshold * 100)}%`),
+        ...simCells(t.withoutNews), ...simCells(t.withNews), ...simCells(t.skipNewsWindows), ...simCells(t.afterRelease), ...simCells(t.beforeRelease)))),
+    h("h3", {}, "โมเดลทำได้ยังไงรอบข่าวแรง (ระดับสูงและสูงสุด)"),
+    table(["", "จำนวนคำทำนาย", "ถูกจริง", "โมเดลบอกว่า", "ราคาไปตามทางที่ทาย", "ขนาดการขยับ", "ต้นทุน", "หลังหักต้นทุน"],
+      nw.windows.flatMap((w) => [statRow(`${WINDOWS[w.name] ?? w.name} · ทั้งหมด`, w.all), statRow(`${WINDOWS[w.name] ?? w.name} · มั่นใจ ≥ 56%`, w.confident)])),
+    h("h3", {}, "ตรวจเวลาข่าว: ทองแกว่งแค่ไหนหลังประกาศ"),
+    table(["ข่าว", "ระดับ", "จำนวนครั้งในข้อมูล", "กรอบ 5 นาทีหลังข่าว เทียบกับปกติ"],
+      (data.events ?? []).map((e) => h("tr", {}, h("td", { class: "mono" }, e.code), h("td", {}, IMPACT[e.impact] ?? e.impact),
+        h("td", { class: "num" }, e.n), h("td", { class: "num" }, e.rangeRatio == null ? "–" : `${e.rangeRatio.toFixed(2)} เท่า`))), 2));
+}
+
 function render() {
   const hz = data.horizons.find((x) => x.minutes === minutes);
   const all = hz.all, best = Math.max(...Object.values(hz.baselines));
@@ -66,6 +96,8 @@ function render() {
       h("h2", {}, "ข้อสรุป: ยังไม่ผ่านเกณฑ์ไป Phase 2"),
       h("p", {}, "โมเดลทายทิศทางได้ดีกว่าการเดาเล็กน้อย (ราว 51%) และความมั่นใจของมันเชื่อถือได้ แต่ระยะที่ราคาไปตามทางที่ทายเล็กกว่าต้นทุนของการเทรดหนึ่งไม้ ",
         "ช่วงที่มั่นใจสูงพอจะชนะต้นทุนเกิดขึ้นน้อยมาก และกำไรกระจุกอยู่ในบางปี ไม่สม่ำเสมอ"),
+      data.hasNews && h("p", {}, "การเพิ่มชั้นข่าวและ macro ไม่ได้ทำให้ทายแม่นขึ้นในช่วง 1–15 นาที ที่ 60 นาทีผลเทรดดีขึ้นเล็กน้อยแต่ยังไม่สม่ำเสมอรายปี ",
+        "สิ่งที่ข้อมูลยืนยันชัดคือ ข่าวทำให้ราคาแกว่งแรงขึ้น 2–8 เท่าโดยที่โมเดลไม่ได้ทายทิศถูกขึ้น ช่วงก่อนข่าว 30 นาทีและ 5–30 นาทีหลังข่าวจึงควรเลี่ยง"),
       h("p", { class: "muted" }, `ต้นทุนที่ใช้ (บัญชี Razor): สเปรดดิบ + slippage ${data.fixedCost} ดอลลาร์ต่อออนซ์ + คอมมิชชั่นไป-กลับ ${data.commissionRoundTripPerMillion} ดอลลาร์ต่อล้าน · ค่าสเปรดดิบเป็นค่าสมมติ ยังไม่ได้วัดจากบัญชีจริง`)),
     h("div", { class: "tabs", role: "group", "aria-label": "ทำนายล่วงหน้ากี่นาที" }, data.horizons.map((x) => tab(x.minutes))),
     h("div", { class: "stats" },
@@ -100,6 +132,8 @@ function render() {
       h("p", { class: "notice" }, anyTradeWins
         ? "มีบางเกณฑ์ที่กำไรรวมและกำไรอย่างน้อย 70% ของปี — ควรยืนยันด้วยการบันทึกสดก่อนใช้จริง"
         : "ไม่มีเกณฑ์ไหนที่กำไรรวมและกำไรสม่ำเสมออย่างน้อย 70% ของปี — ยังไม่มีหลักฐานของความได้เปรียบที่ใช้เทรดได้")),
+
+    hz.news && newsSection(hz),
 
     h("section", { class: "stack" },
       h("h2", {}, "แยกตามปี สภาพตลาด และช่วงเวลา"),
