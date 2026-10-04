@@ -44,7 +44,8 @@ static partial class Phase1
     static int FlowStudy(string[] args)
     {
         string kind = args.Length > 1 ? args[1] : "live", from = args.Length > 2 ? args[2] : "0000-00-00", to = args.Length > 3 ? args[3] : "9999-99-99";
-        string symbol = args.Length > 4 ? args[4] : "XAUUSD";
+        string symbol = args.Length > 4 && !args[4].Contains(":") && args[4] != "check" ? args[4] : "XAUUSD";
+        var stopArg = args.FirstOrDefault(a => a.StartsWith("stop:")); if (stopArg != null) StopUsd = double.Parse(stopArg.Substring(5), Inv);
         var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BacktestLab", kind, symbol);
         if (!Directory.Exists(dir)) { Console.WriteLine("no recording: " + dir); return 1; }
         var files = Directory.GetFiles(dir, "tick-*.csv*").Select(f => (file: f, day: Path.GetFileName(f).Substring(5, 10)))
@@ -199,8 +200,9 @@ static partial class Phase1
             return side * ((side > 0 ? bidO[x] : askO[x]) - entry) - FlowCommission;
         }
 
-        void Row(string label, List<(int m, int side)> events, int hold, double stop = 5)
+        void Row(string label, List<(int m, int side)> events, int hold, double stop = -1)
         {
+            if (stop < 0) stop = StopUsd;
             var st = new St(); var rev = new St(); double gw = 0, gl = 0; var months = new SortedDictionary<string, double>();
             foreach (var (m, side) in events)
             {
@@ -371,14 +373,14 @@ static partial class Phase1
             for (int s = 0; s < 4; s++) Rows((s == 0 ? "leaves the 2-sd VWAP band -> follow, " : "  ") + sesName[s], band[s], 15, 30, 60);
 
             // one trade at a time, the way a cBot would run it
-            Console.WriteLine("\none trade at a time (stop 5):");
-            Replay("PDX yesterday's high/low poked, closed back -> with the poke, hold 15", poke, 15, 5);
-            Replay("PDX the same, hold 30", poke, 30, 5);
-            Replay("VB  New York: leaves the 2-sd VWAP band -> follow, hold 15", band[3], 15, 5);
-            Replay("VB  New York: leaves the 2-sd VWAP band -> follow, hold 30", band[3], 30, 5);
-            Replay("VBL London: leaves the 2-sd VWAP band -> FADE, hold 15", band[2].Select(e => (e.Item1, -e.Item2)).ToList(), 15, 5);
-            Replay("AB  Asia range break -> follow, hold 15", asia[0], 15, 5);
-            Replay("AB  Asia range break -> follow, hold 30", asia[0], 30, 5);
+            Console.WriteLine("\none trade at a time (stop " + StopUsd.ToString("0.#", Inv) + "):");
+            Replay("PDX yesterday's high/low poked, closed back -> with the poke, hold 15", poke, 15, StopUsd);
+            Replay("PDX the same, hold 30", poke, 30, StopUsd);
+            Replay("VB  New York: leaves the 2-sd VWAP band -> follow, hold 15", band[3], 15, StopUsd);
+            Replay("VB  New York: leaves the 2-sd VWAP band -> follow, hold 30", band[3], 30, StopUsd);
+            Replay("VBL London: leaves the 2-sd VWAP band -> FADE, hold 15", band[2].Select(e => (e.Item1, -e.Item2)).ToList(), 15, StopUsd);
+            Replay("AB  Asia range break -> follow, hold 15", asia[0], 15, StopUsd);
+            Replay("AB  Asia range break -> follow, hold 30", asia[0], 30, StopUsd);
         }
 
         void Replay(string label, List<(int m, int side)> events, int hold, double stop)

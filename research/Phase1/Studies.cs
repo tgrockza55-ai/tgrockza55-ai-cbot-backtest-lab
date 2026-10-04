@@ -247,7 +247,7 @@ static partial class Phase1
         using var tradeLog = string.IsNullOrEmpty(logPath) ? null : new System.IO.StreamWriter(logPath, false);
         tradeLog?.WriteLine("unix,dir,entry,raw");
         foreach (int hold in new[] { 5, 15, 30 })
-            foreach (double sl in new[] { 0.0, 2, 3, 5 })
+            foreach (double sl in new[] { 0.0, 2, 3, 5, 8, 12 })
                 foreach (double mult in sl == 0 ? new[] { 0.0 } : new[] { 0.0, 1, 2 })
                 {
                     double tp = sl * mult;

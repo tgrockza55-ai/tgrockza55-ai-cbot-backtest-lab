@@ -119,8 +119,11 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
 ผู้ใช้ต้องการศึกษาพฤติกรรมราคาจริง (ความเร็ว, ข่าว, volume ที่ backtest ไม่มี) ไม่ใช่แค่ทดสอบกฎที่ผ่านแล้ว — **ผู้ใช้เป็นคนกด Start cBot เองใน cTrader เท่านั้น**
 (Claude ห้ามเริ่ม cBot / ส่งคำสั่งเทรดผ่าน MCP, CLI `run` หรือคุมหน้าจอ)
 
-- ตั้งค่า: กราฟ XAUUSD **M1**, Strategy code `SCALP_S3D`, P1 0.56, P2 5, P3 5, P4 1, Lots 0.01 · กลุ่ม Live: `Record market` = Yes,
-  `Place orders` = Yes (No = บันทึกอย่างเดียว), `Book snapshot every (s)` = 2 · cBot ต้องได้สิทธิ์ Full access และ cTrader ต้องเปิดค้างไว้
+- **การตัดสินใจของผู้ใช้ (05/10/2026): SL 12 USD, คงทุน 100 USD, เทรดทองต่อ, cBot เก็บข้อมูลสดมาวิเคราะห์** — `StopUsd` ของเครื่องมือวิจัยจึงมีค่าเริ่มต้น 12 (`stop:<x>`)
+- **ค่าที่ใช้ตอนรันสดมาจาก `Documents\BacktestLab\live.json`** (นอก repo) ซึ่งมาก่อนค่าบนหน้าจอ cTrader — ผู้ใช้แค่กด Start บนกราฟ XAUUSD **M1**
+  `{ "strategy": "SCALP_S3D", "p1": 0.56, "p2": 5, "p3": 12, "p4": 1, "lots": 0.01, "placeOrders": true }` (ใส่ `flatTime` ได้; ไฟล์เสีย = บันทึกอย่างเดียว)
+  จะเปลี่ยนกฎที่รันบน Demo: แก้ไฟล์นี้ **ตามที่ผู้ใช้สั่งเท่านั้น** บอกผู้ใช้ว่าเปลี่ยนเป็นอะไร แล้วให้ผู้ใช้ Stop/Start เอง (rebuild .algo จะทำให้ cTrader รีสตาร์ต instance เอง)
+  ไม่มีไฟล์ = ใช้ค่าบนหน้าจอ (ค่าเริ่มต้นคือ `EMA_CROSS` ซึ่งจะเทรดทันที) · cBot ต้องได้สิทธิ์ Full access และ cTrader ต้องเปิดค้างไว้
 - robot ไม่ส่งคำสั่งบนบัญชีเงินจริงเด็ดขาด (`Account.IsLive` → บันทึกอย่างเดียว) และตอนเริ่มจะโหลดประวัติ ≥ 6,000 แท่งให้ทฤษฎี
 - `LiveRecorder.cs` เขียนลง `%LOCALAPPDATA%\BacktestLab\live\<symbol>\` (นอก OneDrive): `tick-<วัน>.csv` (ทุก tick), `book-<วัน>.csv` (DOM: ราคา:ปริมาณ ทุกชั้น),
   `min-<เดือน>.csv` (สรุปรายนาที + ข่าว + P(ขึ้น) + สัญญาณ), `trades.csv` (ราคาที่เห็น vs ราคาที่ได้, latency), `runs.csv` — ไฟล์วันเก่าถูกบีบเป็น .gz เอง (~2 MB/วัน)

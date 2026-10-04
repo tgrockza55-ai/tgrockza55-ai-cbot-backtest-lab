@@ -32,6 +32,8 @@ static partial class Phase1
     static readonly double[] Edges = { 0.52, 0.54, 0.56, 0.58, 0.60, 0.65 };   // confidence buckets: [0.5,0.52) ... [0.65,1]
     const int TrainMonths = 12;
     static int SeedOffset;
+    // protective stop in USD per oz used by the rule replays (user decision 05/10/2026: 12; it was 5 before). Override with stop:<x>.
+    static double StopUsd = 12;
     const int Warmup = 1500;
 
     static long[] T; static double[] O, H, L, C, V;
@@ -118,7 +120,8 @@ static partial class Phase1
         var export = args.Contains("export");                                                // write the monthly models for the cBot
         var predict = args.Contains("predict");                                              // save walk-forward predictions for the scalp studies
         SeedOffset = int.Parse(args.FirstOrDefault(a => a.StartsWith("seed:"))?.Substring(5) ?? "0", Inv);   // another shuffle of the training data: how much does a result depend on it?
-        args = args.Where(a => !a.StartsWith("study:") && !a.StartsWith("period:") && !a.StartsWith("seed:") && a != "predict" && a != "export").ToArray();
+        var stopText = args.FirstOrDefault(a => a.StartsWith("stop:")); if (stopText != null) StopUsd = double.Parse(stopText.Substring(5), Inv);
+        args = args.Where(a => !a.StartsWith("study:") && !a.StartsWith("period:") && !a.StartsWith("seed:") && !a.StartsWith("stop:") && a != "predict" && a != "export").ToArray();
         var symbol = args.Length > 1 ? args[1] : "XAUUSD";
         var csv = args.Length > 0 && args[0] != "-" ? args[0] : Path.Combine(docs, "BacktestLab", "data", symbol + "_Minute.csv");
         FixedCost = args.Length > 2 ? double.Parse(args[2], Inv) : 0.22;

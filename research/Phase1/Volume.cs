@@ -26,7 +26,7 @@ static partial class Phase1
         int n = T.Length;
         var rng = new double[n]; for (int i = 0; i < n; i++) rng[i] = H[i] - L[i];
         var usualRng = RollMean(rng, 60);
-        Console.WriteLine("\n==== LX London exhaustion fade (USD per oz = percent of a 100 USD account at 0.01 lot; replay enters at the next open, stop filled at its price) ====");
+        Console.WriteLine("\n==== LX London exhaustion fade (USD per oz = percent of a 100 USD account at 0.01 lot; replay enters at the next open, stop " + StopUsd.ToString("0.#", Inv) + " filled at its price) ====");
         // LXg = the same with a volatility gate: only when the average range of the last 60 bars is >= 1 USD (about 4-5x the cost), because the
         // reversal grows with volatility while the cost does not. The gate value was fixed before looking at any result.
         foreach (var (gate, cost) in new[] { (0.0, FixedCost), (0.0, 0.30), (1.0, FixedCost), (1.0, 0.30) })
@@ -41,10 +41,10 @@ static partial class Phase1
                 int below = 0; for (int j = i - 1440; j < i; j++) if (V[j] < V[i]) below++;
                 if (below < 0.95 * 1440) continue;
 
-                double raw = ReplayExit(i, -Math.Sign(body), 5, 0, 5, out int next);
+                double raw = ReplayExit(i, -Math.Sign(body), StopUsd, 0, 5, out int next);
                 if (double.IsNaN(raw)) continue;
                 free = next; long t = T[i]; if (first == 0) first = t; last = t;
-                if (raw <= -5) stops++;
+                if (raw <= -StopUsd) stops++;
                 double pnl = raw - cost;
                 st.Add(pnl); if (pnl > 0) gw += pnl; else gl -= pnl;
                 cum += pnl; peak = Math.Max(peak, cum); maxDd = Math.Max(maxDd, peak - cum); worst = Math.Min(worst, pnl);

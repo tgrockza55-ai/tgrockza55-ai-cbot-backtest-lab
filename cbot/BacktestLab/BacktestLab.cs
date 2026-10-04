@@ -102,6 +102,7 @@ namespace cAlgo.Robots
             var live = RunningMode == RunningMode.RealTime;
             if (live)
             {
+                ApplyLiveSettings();
                 try
                 {
                     for (int k = 0; k < 30 && Bars.Count < LiveHistoryBars; k++)
@@ -148,6 +149,42 @@ namespace cAlgo.Robots
                     Timer.Start(1);
                 }
                 catch (Exception e) { _recorder = null; Print("Recorder could not start: {0}", e.Message); }
+            }
+        }
+
+        /// <summary>
+        /// รันสด: ถ้ามี Documents\BacktestLab\live.json ค่าในไฟล์มาก่อนค่าที่ตั้งบนหน้าจอ cTrader (ซึ่งค้างค่าเริ่มต้น EMA_CROSS ได้ง่าย)
+        ///   { "strategy": "SCALP_S3D", "p1": 0.56, "p2": 5, "p3": 12, "p4": 1, "lots": 0.01, "placeOrders": true, "flatTime": 0 }
+        /// ใส่เฉพาะช่องที่ต้องการกำหนด; ไฟล์เสีย = ไม่ส่งออเดอร์ (บันทึกอย่างเดียว) เพื่อไม่ให้ไปเทรดด้วยค่าที่ไม่ได้ตั้งใจ
+        /// </summary>
+        private void ApplyLiveSettings()
+        {
+            var file = System.IO.Path.Combine(Reporter.Folder, "live.json");
+            if (!System.IO.File.Exists(file))
+            {
+                Print("No live.json: using the parameters set in cTrader (Strategy code = {0})", StrategyCode);
+                return;
+            }
+            try
+            {
+                using (var doc = System.Text.Json.JsonDocument.Parse(System.IO.File.ReadAllText(file)))
+                {
+                    var root = doc.RootElement; System.Text.Json.JsonElement v;
+                    if (root.TryGetProperty("strategy", out v)) StrategyCode = v.GetString();
+                    if (root.TryGetProperty("p1", out v)) P1 = v.GetDouble();
+                    if (root.TryGetProperty("p2", out v)) P2 = v.GetDouble();
+                    if (root.TryGetProperty("p3", out v)) P3 = v.GetDouble();
+                    if (root.TryGetProperty("p4", out v)) P4 = v.GetDouble();
+                    if (root.TryGetProperty("lots", out v)) Lots = v.GetDouble();
+                    if (root.TryGetProperty("placeOrders", out v)) PlaceOrders = v.GetBoolean();
+                    if (root.TryGetProperty("flatTime", out v)) FlatTime = v.GetInt32();
+                }
+                Print("Live settings from live.json: {0}  P1 {1}  P2 {2}  P3 {3}  P4 {4}  lots {5}  place orders {6}", StrategyCode, P1, P2, P3, P4, Lots, PlaceOrders);
+            }
+            catch (Exception e)
+            {
+                PlaceOrders = false;
+                Print("live.json could not be read ({0}): recording only, no orders", e.Message);
             }
         }
 
