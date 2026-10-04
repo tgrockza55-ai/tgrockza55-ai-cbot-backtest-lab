@@ -88,6 +88,9 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
 - ชั้น 0 (2 วินาที): `research\Phase1\bin\Release\net6.0\Phase1.exe study:<h1..h7|all> [period:explore|validate|holdout|all]` — เพิ่มทฤษฎีใหม่ใน `research\Phase1\Studies.cs`
 - ชั้น 2 (~1 นาที): `tools\backtest.ps1 ... -Spread 2.2 -FlatTime 2045` (สเปรด 2.2 pips = ต้นทุน Razor 0.22)
 - ช่วงข้อมูล: explore 2020–2024 (ลองได้อิสระ), validate 2025–02/2026 และ holdout 03–09/2026 (เปิดดูเฉพาะกฎที่ล็อกแล้ว และจดทุกครั้งใน JOURNAL)
+- **ทุนจริงของผู้ใช้ = 100 USD และเน้น scalp** (แจ้ง 04/10/2026): 0.01 lot = 1 ออนซ์ → ทองขยับ 1 USD = 1% ของบัญชี; ทุกกฎต้องรายงาน drawdown เป็น USD ต่อออนซ์ (= % ของทุน)
+  งาน scalp ใช้เฉพาะช่วงผันผวนสูง: `period:hv-explore` (2025-01..2026-02), `hv-validate` (2026-03..06), `hv-holdout` (2026-07..09)
+  ตัวเต็ง scalp = S3b (โมเดล 5 นาที ≥ 56% + ทิศเดียวกับวัน + เฉพาะลอนดอน + เลี่ยงข่าว): `Phase1.exe predict` แล้ว `study:s3`; ยังไม่มีใน cBot
 - สถานะ: กฎ R1 = `CH_SESSION_MOM` (โมเมนตัมข้าม session, เข้า 07:00 และ 10:00 UTC, ปิด 20:45 UTC) กำไรครบ 3 ช่วง (run #49–#51)
   แต่ drawdown สูง (27–64% ของบัญชี 1,000) และยังไม่ได้ทดสอบเดินหน้า — หน้า `summary.html` แสดงกฎนี้
 

@@ -34,7 +34,7 @@ static partial class Phase1
     const int Warmup = 1500;
 
     static long[] T; static double[] O, H, L, C, V;
-    static double FixedCost, CommissionRate;
+    static double FixedCost, CommissionRate; static string SymbolName;
     static double Cost(int bar) => FixedCost + CommissionRate * C[bar];
     static string[] FeatureNames;
     static float[][] X;          // [feature][bar]
@@ -111,7 +111,8 @@ static partial class Phase1
         var docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         var study = args.FirstOrDefault(a => a.StartsWith("study:"))?.Substring(6);          // tier-0 event studies (Studies.cs)
         var period = args.FirstOrDefault(a => a.StartsWith("period:"))?.Substring(7) ?? "explore";
-        args = args.Where(a => !a.StartsWith("study:") && !a.StartsWith("period:")).ToArray();
+        var predict = args.Contains("predict");                                              // save walk-forward predictions for the scalp studies
+        args = args.Where(a => !a.StartsWith("study:") && !a.StartsWith("period:") && a != "predict").ToArray();
         var symbol = args.Length > 1 ? args[1] : "XAUUSD";
         var csv = args.Length > 0 && args[0] != "-" ? args[0] : Path.Combine(docs, "BacktestLab", "data", symbol + "_Minute.csv");
         FixedCost = args.Length > 2 ? double.Parse(args[2], Inv) : 0.22;
@@ -122,8 +123,11 @@ static partial class Phase1
         Load(csv);
         Console.WriteLine($"bars: {T.Length:N0}  {Date(T[0])} .. {Date(T[T.Length - 1])}   cost per trade: {FixedCost} + {CommissionRate * 1e6:N0} per million round trip (= {Cost(0):N3} at {C[0]:N0}, {Cost(T.Length - 1):N3} at {C[T.Length - 1]:N0})");
         HasNews = LoadNews(docs);
-        if (study != null) return RunStudy(study, period);
+        SymbolName = symbol;
+        if (study != null && study != "h9" && study != "h10" && study != "s3") return RunStudy(study, period);
         BuildFeatures();
+        if (study == "h9" || study == "h10" || study == "s3") return RunStudy(study, period);
+        if (predict) { SavePredictions(); return 0; }
         Console.WriteLine($"features: {BaseCount} price/volume" + (HasNews ? $" + {FeatureNames.Length - BaseCount} news/macro ({EvT.Length} scheduled releases, {MacroDay?.Length ?? 0} macro days)" : "  (no news cache: run tools\\news-fetch.ps1)"));
         var eventJson = "";
         if (HasNews) { Console.WriteLine("release-time check:"); eventJson = EventStudy(); }

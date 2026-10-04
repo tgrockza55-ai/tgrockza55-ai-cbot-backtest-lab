@@ -25,7 +25,11 @@ static partial class Phase1
             case "validate": PFrom = U(2025, 1); PTo = U(2026, 3); break;
             case "holdout": PFrom = U(2026, 3); PTo = long.MaxValue; break;
             case "all": PFrom = 0; PTo = long.MaxValue; break;
-            default: throw new ArgumentException("period: explore | validate | holdout | all");
+            // scalp research uses only the high-volatility regime (user decision 04/10/2026)
+            case "hv-explore": PFrom = U(2025, 1); PTo = U(2026, 3); break;
+            case "hv-validate": PFrom = U(2026, 3); PTo = U(2026, 7); break;
+            case "hv-holdout": PFrom = U(2026, 7); PTo = long.MaxValue; break;
+            default: throw new ArgumentException("period: explore | validate | holdout | all | hv-explore | hv-validate | hv-holdout");
         }
         Console.WriteLine($"period: {name}  ({Date(Math.Max(PFrom, T[0]))} .. {Date(Math.Min(PTo - 1, T[T.Length - 1]))})   cost per round trip: {FixedCost}");
     }
@@ -62,7 +66,184 @@ static partial class Phase1
         if (name == "h6") MomentumDose();
         if (name == "h7") AnchorDrive();
         if (name == "h8") SessionBehaviour();
+        if (name == "h9") ScalpGate();
+        if (name == "h10") ScalpAnatomy();
+        if (name == "s3") ScalpRuleS3();
         return 0;
+    }
+
+    // ------------------------------------------------------------------ prediction cache (so scalp rules can be tried in seconds)
+    // Phase1.exe predict  -> %LOCALAPPDATA%\BacktestLab\cache\pred-<symbol>.bin   (outside OneDrive; safe to delete, takes ~2 minutes to rebuild)
+
+    static readonly int[] ScalpHorizons = { 1, 3, 5, 15 };
+    static string CachePath => System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BacktestLab", "cache", "pred-" + SymbolName + ".bin");
+
+    static void SavePredictions()
+    {
+        var months = MonthStarts();
+        Active = X.Take(BaseCount).ToArray();                    // price/volume features only: the news layer did not improve short horizons
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(CachePath));
+        using (var w = new System.IO.BinaryWriter(System.IO.File.Create(CachePath)))
+        {
+            w.Write(T.Length); w.Write(T[T.Length - 1]); w.Write(ScalpHorizons.Length);
+            foreach (var h in ScalpHorizons)
+            {
+                var res = WalkForward(h, months);
+                w.Write(h); w.Write(res.Count);
+                foreach (var p in res) { w.Write(p.Bar); w.Write(p.P); }
+                Console.WriteLine($"horizon {h} min: {res.Count:N0} predictions");
+            }
+        }
+        Console.WriteLine("wrote " + CachePath + $" ({new System.IO.FileInfo(CachePath).Length / 1048576} MB)");
+    }
+
+    static Dictionary<int, List<Pred>> LoadPredictions()
+    {
+        if (!System.IO.File.Exists(CachePath)) { Console.WriteLine("no prediction cache: run  Phase1.exe predict"); return null; }
+        var all = new Dictionary<int, List<Pred>>();
+        using (var r = new System.IO.BinaryReader(System.IO.File.OpenRead(CachePath)))
+        {
+            if (r.ReadInt32() != T.Length || r.ReadInt64() != T[T.Length - 1]) { Console.WriteLine("prediction cache does not match the bar file: run  Phase1.exe predict"); return null; }
+            int nh = r.ReadInt32();
+            for (int q = 0; q < nh; q++)
+            {
+                int h = r.ReadInt32(), n = r.ReadInt32(); var list = new List<Pred>(n);
+                for (int i = 0; i < n; i++) { int bar = r.ReadInt32(); float p = r.ReadSingle(); list.Add(new Pred { Bar = bar, P = p, Move = (float)(C[bar + h] - C[bar]) }); }
+                all[h] = list;
+            }
+        }
+        return all;
+    }
+
+    // ------------------------------------------------------------------ S3: pullback scalp in the direction of the day (rule locked 04/10/2026 from hv-explore)
+    // minute model confident >= 56% at 5 minutes, trade direction = direction of the day so far (price vs the day's open, UTC),
+    // away from scheduled news, hold 5 minutes, one trade at a time. S3b = the same, London session only (07:00-13:00 UTC).
+
+    static void ScalpRuleS3()
+    {
+        var preds = LoadPredictions(); if (preds == null) return;
+        int n = T.Length; const int h = 5; const double th = 0.56;
+        var dayOpen = new double[n]; long curDay = -1; double open = 0;
+        for (int i = 0; i < n; i++) { long d = T[i] / 86400; if (d != curDay) { curDay = d; open = O[i]; } dayOpen[i] = open; }
+        Console.WriteLine("\n==== S3 pullback scalp with the day (USD per oz after cost = percent of a 100 USD account at 0.01 lot) ====");
+        foreach (var (label, londonOnly) in new[] { ("S3  all sessions", false), ("S3b London only ", true) })
+        {
+            var st = new St(); double gw = 0, gl = 0, cum = 0, peak = 0, maxDd = 0, worst = 0; long freeAt = 0, first = 0, last = 0;
+            var months = new SortedDictionary<string, St>(); var daysPnl = new SortedDictionary<long, double>();
+            foreach (var p in preds[h])
+            {
+                long t = T[p.Bar]; int i = p.Bar;
+                double conf = p.P >= 0.5 ? p.P : 1 - p.P;
+                if (!InPeriod(t) || t < freeAt || conf < th || Window[i] != 0) continue;
+                int dir = p.P >= 0.5 ? 1 : -1;
+                if (Math.Sign(C[i] - dayOpen[i]) != dir) continue;
+                if (londonOnly && Session[i] != 1) continue;
+                freeAt = t + h * 60L; if (first == 0) first = t; last = t;
+                double pnl = dir * p.Move - FixedCost;
+                st.Add(pnl); if (pnl > 0) gw += pnl; else gl -= pnl;
+                cum += pnl; peak = Math.Max(peak, cum); maxDd = Math.Max(maxDd, peak - cum); worst = Math.Min(worst, pnl);
+                var d = DateTimeOffset.FromUnixTimeSeconds(t).UtcDateTime; string key = d.ToString("yy-MM", Inv);
+                if (!months.TryGetValue(key, out var m)) months[key] = m = new St();
+                m.Add(pnl);
+                daysPnl[t / 86400] = (daysPnl.TryGetValue(t / 86400, out var dp) ? dp : 0) + pnl;
+            }
+            if (st.N == 0) { Console.WriteLine($"{label}: no trades"); continue; }
+            Console.WriteLine($"{label}: n {st.N} ({st.N / Math.Max(1, (last - first) / 86400.0 * 5 / 7):N1}/day)  win {st.Win:N1}%  avg {st.Mean:N3}  PF {(gl > 0 ? gw / gl : 0):N2}  net {st.Sum:N0}  t {st.TStat:N2}");
+            Console.WriteLine($"   max drawdown {maxDd:N0}   worst trade {worst:N1}   worst day {daysPnl.Values.Min():N1}   best day {daysPnl.Values.Max():N1}   losing days {100.0 * daysPnl.Values.Count(v => v < 0) / daysPnl.Count:N0}%");
+            Console.WriteLine("   by month (net, trades): " + string.Join("  ", months.Select(kv => $"{kv.Key}: {kv.Value.Sum.ToString("+0;-0", Inv)} ({kv.Value.N})")));
+        }
+    }
+
+    // ------------------------------------------------------------------ H10: where do the scalp trades of the minute model win and lose?
+    // Trades: confidence >= threshold, away from scheduled news, one at a time, hold h minutes, cost charged. Then split by context.
+
+    static void ScalpAnatomy()
+    {
+        var preds = LoadPredictions(); if (preds == null) return;
+        int n = T.Length;
+        var dayOpen = new double[n]; long curDay = -1; double open = 0;
+        for (int i = 0; i < n; i++) { long d = T[i] / 86400; if (d != curDay) { curDay = d; open = O[i]; } dayOpen[i] = open; }
+        var a5 = new double[n]; for (int i = 5; i < n; i++) a5[i] = Math.Abs(C[i] - C[i - 5]);
+        var usual5 = RollMean(a5, 1440);
+        Console.WriteLine("\n==== H10 anatomy of the model scalps (USD per oz after cost = percent of a 100 USD account) ====");
+        foreach (var h in new[] { 3, 5, 15 })
+            foreach (var th in new[] { 0.56, 0.58 })
+            {
+                var groups = new SortedDictionary<string, (St st, double[] g)>();
+                void Add(string key, double pnl) { if (!groups.TryGetValue(key, out var v)) groups[key] = v = (new St(), new double[2]); v.st.Add(pnl); if (pnl > 0) v.g[0] += pnl; else v.g[1] -= pnl; }
+                long freeAt = 0;
+                foreach (var p in preds[h])
+                {
+                    long t = T[p.Bar]; int i = p.Bar;
+                    double conf = p.P >= 0.5 ? p.P : 1 - p.P;
+                    if (!InPeriod(t) || t < freeAt || conf < th || Window[i] != 0) continue;
+                    freeAt = t + h * 60L;
+                    int dir = p.P >= 0.5 ? 1 : -1; double pnl = dir * p.Move - FixedCost;
+                    Add("0 all", pnl);
+                    int dayDir = Math.Sign(C[i] - dayOpen[i]);
+                    Add(dayDir == dir ? "1 WITH the day so far" : "1 against the day so far", pnl);
+                    Add(Math.Sign(C[i] - C[i - 15]) == dir ? "2 follows the last 15 min" : "2 fades the last 15 min", pnl);
+                    Add(Math.Sign(C[i] - C[i - 1]) == dir ? "3 follows the last candle" : "3 fades the last candle", pnl);
+                    Add("4 session " + SessionNames[Session[i]], pnl);
+                    Add("5 regime " + RegimeNames[Regime[i]], pnl);
+                    Add("6 usual 5-min move " + (usual5[i] < 1.5 ? "a < 1.5" : usual5[i] < 3 ? "b 1.5-3" : usual5[i] < 6 ? "c 3-6" : "d >= 6"), pnl);
+                }
+                Console.WriteLine($"\n---- hold {h} min, confidence >= {th * 100:0}% ----");
+                foreach (var kv in groups)
+                    Console.WriteLine($"  {kv.Key.Substring(2),-28} n {kv.Value.st.N,5} win {kv.Value.st.Win,5:N1}% avg {kv.Value.st.Mean,7:N3} PF {(kv.Value.g[1] > 0 ? kv.Value.g[0] / kv.Value.g[1] : 0),4:N2} net {kv.Value.st.Sum,7:N0} t {kv.Value.st.TStat,5:N2}");
+            }
+    }
+
+    // ------------------------------------------------------------------ H9 / S1: scalp only when the expected edge beats the cost
+    // alpha(bucket) = how far the price goes in the predicted direction, as a share of the usual h-minute move — measured on 2021-2024 only.
+    // Rule: enter when alpha x (usual move right now) - cost >= margin x cost; hold h minutes; one trade at a time.
+
+    static void ScalpGate()
+    {
+        var preds = LoadPredictions(); if (preds == null) return;
+        long exFrom = new DateTimeOffset(2021, 1, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds(), exTo = new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
+        bool byMonth = PTo - Math.Max(PFrom, T[0]) < 800L * 86400;
+        int nb = Edges.Length + 1, n = T.Length;
+        Console.WriteLine("\n==== H9 / S1 scalp gate: trade the minute model only when its expected edge beats the cost ====");
+        Console.WriteLine("USD per oz = percent of a 100 USD account at 0.01 lot. alpha is measured on 2021-2024 and then frozen.");
+        foreach (var h in ScalpHorizons)
+        {
+            var a = new double[n]; for (int i = h; i < n; i++) a[i] = Math.Abs(C[i] - C[i - h]);
+            var usual = RollMean(a, 1440);                                       // typical |h-minute move| over the last trading day
+            var num = new double[nb]; var den = new double[nb]; var cnt = new long[nb];
+            foreach (var p in preds[h])
+            {
+                long t = T[p.Bar]; if (t < exFrom || t >= exTo) continue;
+                int b = Bucket(p.P); num[b] += (p.P >= 0.5 ? p.Move : -p.Move); den[b] += usual[p.Bar]; cnt[b]++;
+            }
+            var alpha = Enumerable.Range(0, nb).Select(b => den[b] > 0 ? num[b] / den[b] : 0).ToArray();
+            Console.WriteLine($"\n---- hold {h} minutes ----");
+            Console.WriteLine("  confidence   n (2021-24)    alpha   usual move needed to cover the cost");
+            for (int b = 0; b < nb; b++) if (cnt[b] > 0) Console.WriteLine($"  {BucketName(b),-9} {cnt[b],12:N0}  {alpha[b],7:N3}   {(alpha[b] > 0 ? (FixedCost / alpha[b]).ToString("N2", Inv) : "never")}");
+
+            foreach (var margin in new[] { 0.0, 0.5, 1.0 })
+                foreach (var skipNews in new[] { false, true })
+                {
+                    var st = new St(); double gw = 0, gl = 0; long freeAt = 0, first = 0, last = 0;
+                    var by = new SortedDictionary<string, St>();
+                    foreach (var p in preds[h])
+                    {
+                        long t = T[p.Bar]; if (!InPeriod(t) || t < freeAt) continue;
+                        int b = Bucket(p.P);
+                        if (alpha[b] <= 0 || alpha[b] * usual[p.Bar] - FixedCost < margin * FixedCost) continue;
+                        if (skipNews && Window[p.Bar] != 0) continue;
+                        double pnl = (p.P >= 0.5 ? p.Move : -p.Move) - FixedCost;
+                        st.Add(pnl); if (pnl > 0) gw += pnl; else gl -= pnl;
+                        var d = DateTimeOffset.FromUnixTimeSeconds(t).UtcDateTime; string key = byMonth ? d.ToString("yy-MM", Inv) : d.ToString("yy", Inv);
+                        if (!by.TryGetValue(key, out var y)) by[key] = y = new St();
+                        y.Add(pnl);
+                        freeAt = t + h * 60L; if (first == 0) first = t; last = t;
+                    }
+                    double tradingDays = Math.Max(1, (last - first) / 86400.0 * 5 / 7);
+                    Console.WriteLine($"  edge >= {1 + margin:0.0}x cost{(skipNews ? ", away from news" : "               ")}: n {st.N,5} ({st.N / tradingDays,4:N1}/day) win {st.Win,5:N1}% PF {(gl > 0 ? gw / gl : 0),4:N2} net {st.Sum,7:N0} avg {st.Mean,6:N3} t {st.TStat,5:N2} | "
+                        + string.Join(" ", by.Select(kv => $"{kv.Key}:{kv.Value.Sum.ToString("+0;-0", Inv)}")));
+                }
+        }
     }
 
     // ------------------------------------------------------------------ H8: how does each session behave, and which kind of rule fits it?
