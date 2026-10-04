@@ -134,15 +134,16 @@ namespace cAlgo.Robots
             else if (RunningMode != RunningMode.Optimization && SendResults)
                 Reporter.RetryPending(this);
 
-            // BACKTESTLAB_RECORD=1: ทดสอบตัวบันทึกใน backtest (เขียนลงโฟลเดอร์ live-test; ไม่มี DOM)
-            var testRecorder = !live && RunningMode != RunningMode.Optimization && Environment.GetEnvironmentVariable("BACKTESTLAB_RECORD") == "1";
-            if ((live && RecordMarket) || testRecorder)
+            // BACKTESTLAB_RECORD=<ชื่อโฟลเดอร์>: ใช้ตัวบันทึกใน backtest (ทดสอบ หรือสร้างข้อมูล tick ย้อนหลังให้งานวิจัย; ไม่มี DOM)
+            var recordTo = live || RunningMode == RunningMode.Optimization ? null : Environment.GetEnvironmentVariable("BACKTESTLAB_RECORD");
+            if ((live && RecordMarket) || !string.IsNullOrEmpty(recordTo))
             {
                 try
                 {
-                    MarketDepth depth = null;
+                    MarketDepth depth = null; Ticks history = null;
                     try { depth = MarketData.GetMarketDepth(SymbolName); } catch (Exception e) { Print("No market depth: {0}", e.Message); }
-                    _recorder = new LiveRecorder(this, depth, BookSeconds, testRecorder, _strategy.Code);
+                    if (live) try { history = MarketData.GetTicks(); } catch (Exception e) { Print("No tick history: {0}", e.Message); }
+                    _recorder = new LiveRecorder(this, depth, history, BookSeconds, live ? null : recordTo, _strategy.Code);
                     Positions.Closed += OnPositionClosed;
                     Timer.Start(1);
                 }

@@ -6,6 +6,8 @@
 //   tick-YYYY-MM-DD.csv   time,bid,ask          ทุก tick (เวลา UTC)
 //   book-YYYY-MM-DD.csv   time,bids,asks        ภาพ DOM เมื่อมีการเปลี่ยนแปลง ไม่ถี่กว่าที่ตั้งไว้ — แต่ละฝั่งเป็น ราคา:ปริมาณ|ราคา:ปริมาณ เรียงจากราคาที่ดีที่สุด
 //   min-YYYY-MM.csv       หนึ่งแถวต่อแท่ง M1 ที่ปิดแล้ว: แท่งราคา + สรุป tick / สเปรด / DOM + ข่าว + คำทำนาย + สัญญาณ
+//   flow-YYYY-MM.csv      หนึ่งแถวต่อนาที: delta / CVD, anchored VWAP, volume profile (POC, VAH, VAL), ระดับสภาพคล่องและ sweep (FlowTracker.cs)
+//                         + ladderBid / ladderAsk = ระยะจากราคาที่ดีที่สุดถึงชั้นลึกสุดของ DOM เฉลี่ยในนาที (สภาพคล่องบางลง = ระยะกว้างขึ้น)
 //   trades.csv            OPEN / CLOSE ของทุกออเดอร์ พร้อมราคาที่ตั้งใจ ราคาที่ได้จริง และเวลาที่ใช้ส่งคำสั่ง
 //   runs.csv              เวลาเริ่ม / หยุดของ cBot (นาทีแรกหลังเริ่มไม่ครบ จึงไม่ถูกเขียนลง min)
 // ไฟล์ tick / book ของวันก่อน ๆ ถูกบีบเป็น .csv.gz อัตโนมัติ
@@ -38,8 +40,9 @@ namespace cAlgo.Robots
                                             "nextNews,nextImpact,minToNext,lastNews,lastImpact,minSinceLast,pUp,signal,positions,equity";
         private const string TradeHeader = "time,event,id,side,units,price,expected,slippage,latencyMs,spread,stopLoss,pUp,reason,gross,commission,swap,net,balance";
 
-        public static string Root(bool test) =>
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BacktestLab", test ? "live-test" : "live");
+        /// <summary>folder = "live" ตอนรันสด; ตอนทดสอบใน backtest ใช้ชื่ออื่นเสมอ (ค่าเริ่มต้น live-test) เพื่อไม่ให้ปนกับข้อมูลจริง</summary>
+        public static string Root(string folder) =>
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BacktestLab", folder);
 
         private struct News { public long Time; public int Rank; public string Code, Impact; }
 
@@ -52,6 +55,8 @@ namespace cAlgo.Robots
         private StreamWriter _tick, _book;
         private DateTime _day = DateTime.MinValue, _lastBook = DateTime.MinValue, _lastFlush = DateTime.MinValue;
         private bool _bookDirty, _firstBar = true;
+        private FlowTracker _flow;
+        private double _ladderBid, _ladderAsk; private int _ladderCount;      // สะสมระหว่างสองแถวของ flow
         private volatile News[] _news = new News[0];
         private volatile string _message;                    // ข้อความจากงานเบื้องหลัง — พิมพ์ลง Log ตอนแท่งถัดไป
         private int _errors;
@@ -60,10 +65,13 @@ namespace cAlgo.Robots
         private int _ticks, _books, _depthUpdates;
         private double _spreadSum, _spreadMax, _bidVolSum, _askVolSum, _imbalanceSum;
 
-        public LiveRecorder(Robot bot, MarketDepth depth, int bookSeconds, bool test, string strategy)
+        /// <param name="history">tick ย้อนหลังของ symbol (รันสด) ใช้สร้างสถานะของวันนี้และวันก่อนให้ FlowTracker ตั้งแต่เริ่ม; null = เริ่มจากศูนย์</param>
+        /// <param name="testFolder">null = รันสด (โฟลเดอร์ live); ไม่ null = ทดสอบใน backtest เขียนลงโฟลเดอร์ชื่อนี้</param>
+        public LiveRecorder(Robot bot, MarketDepth depth, Ticks history, int bookSeconds, string testFolder, string strategy)
         {
+            bool test = testFolder != null;
             _bot = bot; _depth = depth; _bookEvery = Math.Max(1, bookSeconds); _test = test;
-            _dir = Path.Combine(Root(test), bot.SymbolName);
+            _dir = Path.Combine(Root(!test ? "live" : testFolder == "live" || testFolder == "1" ? "live-test" : testFolder), bot.SymbolName);
             _newsDir = Path.Combine(Reporter.Folder, "data", "news");
             _price = "F" + bot.Symbol.Digits;
             Directory.CreateDirectory(_dir);
@@ -75,7 +83,11 @@ namespace cAlgo.Robots
             if (_depth != null) _depth.Updated += () => Guard(OnDepth);
             Append("runs.csv", "time,event,account,balance,strategy", string.Join(",", Stamp(now), "START",
                 bot.Account.IsLive ? "live" : "demo", Num(bot.Account.Balance, "0.00"), strategy));
+            _flow = test ? new FlowTracker() : WarmFlow(history, now);
             bot.Print("Recording the market to {0} ({1} scheduled news events loaded)", _dir, _news.Length);
+            if (!test) bot.Print("Flow tracker: today's values are {0}; yesterday's levels are {1}",
+                _flow.DayWarm ? "complete from the start of the trading day" : "incomplete until the next trading day starts (22:00 UTC)",
+                _flow.PrevWarm ? "complete" : "not complete yet");
         }
 
         // ------------------------------------------------------------------ ทางเข้าจาก robot
@@ -88,6 +100,14 @@ namespace cAlgo.Robots
             _tick.Write(bid.ToString(_price, Inv)); _tick.Write(',');
             _tick.WriteLine(ask.ToString(_price, Inv));
             _ticks++; _spreadSum += spread; if (spread > _spreadMax) _spreadMax = spread;
+
+            var row = _flow.Feed(Unix(now), bid, ask);                          // ไม่ null = นาทีก่อนหน้าปิดแล้ว
+            if (row != null)
+            {
+                Append("flow-" + row.Substring(0, 7) + ".csv", FlowTracker.Header + ",ladderBid,ladderAsk", row + "," +
+                    (_ladderCount > 0 ? Num(_ladderBid / _ladderCount, "0.###") : "") + "," + (_ladderCount > 0 ? Num(_ladderAsk / _ladderCount, "0.###") : ""));
+                _ladderBid = _ladderAsk = 0; _ladderCount = 0;
+            }
         });
 
         public void OnTimer() => Guard(() =>
@@ -162,6 +182,42 @@ namespace cAlgo.Robots
                 _bot.Account.IsLive ? "live" : "demo", Num(_bot.Account.Balance, "0.00"), ""));
         });
 
+        // ------------------------------------------------------------------ flow (FlowTracker)
+
+        /// <summary>
+        /// สร้างสถานะของ FlowTracker ก่อนรับ tick สด: ลอง tick ย้อนหลังจาก cTrader ก่อน (ไม่เกิน 20 วินาที)
+        /// ถ้าได้ไม่ถึงต้นวันเทรด ใช้ไฟล์ tick ที่ตัวบันทึกเขียนไว้เอง 5 วันล่าสุดแทน; ไม่ได้ทั้งสองทางก็เริ่มจากศูนย์ (dayWarm = 0)
+        /// </summary>
+        private FlowTracker WarmFlow(Ticks history, DateTime now)
+        {
+            var flow = new FlowTracker();
+            try
+            {
+                if (history != null)
+                {
+                    var from = now.AddDays(-4); var clock = System.Diagnostics.Stopwatch.StartNew();
+                    while (history.Count > 0 && history[0].Time > from && clock.Elapsed.TotalSeconds < 20)
+                        if (history.LoadMoreHistory() <= 0) break;
+                    for (int i = 0; i < history.Count; i++) flow.Feed(Unix(history[i].Time), history[i].Bid, history[i].Ask);
+                    _bot.Print("Flow tracker: {0} historical ticks from {1:yyyy-MM-dd HH:mm}", history.Count, history.Count > 0 ? history[0].Time : now);
+                }
+            }
+            catch (Exception e) { _bot.Print("Flow tracker: tick history not available: {0}", e.Message); flow = new FlowTracker(); }
+            if (flow.DayWarm) return flow;
+
+            var files = new FlowTracker();
+            try
+            {
+                for (int back = 5; back >= 0; back--)
+                {
+                    var file = Path.Combine(_dir, "tick-" + Day(now.Date.AddDays(-back)) + ".csv");
+                    if (File.Exists(file + ".gz")) files.ReplayFile(file + ".gz"); else if (File.Exists(file)) files.ReplayFile(file);
+                }
+            }
+            catch (Exception e) { _bot.Print("Flow tracker: could not replay the tick files: {0}", e.Message); }
+            return files.DayWarm || !flow.HasState ? files : flow;
+        }
+
         // ------------------------------------------------------------------ DOM
 
         private void OnDepth()
@@ -184,6 +240,10 @@ namespace cAlgo.Robots
             double bidVol = Levels(bids); _sb.Append(',');
             double askVol = Levels(asks);
             _book.WriteLine(_sb.ToString());
+            if (bids.Count > 1 && asks.Count > 1)
+            {
+                _ladderBid += bids[0].Price - bids[bids.Count - 1].Price; _ladderAsk += asks[asks.Count - 1].Price - asks[0].Price; _ladderCount++;
+            }
             _books++; _bidVolSum += bidVol; _askVolSum += askVol;
             if (bidVol + askVol > 0) _imbalanceSum += (bidVol - askVol) / (bidVol + askVol);
         }

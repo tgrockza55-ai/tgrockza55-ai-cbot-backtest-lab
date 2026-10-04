@@ -33,6 +33,17 @@ if ($min) {
     if ($age -gt 5) { Write-Host "  No new minute for more than 5 minutes: market closed, or the cBot / cTrader is not running." -ForegroundColor Yellow }
 }
 
+$flow = $files | Where-Object { $_.Name -like "flow-*.csv" } | Sort-Object Name | Select-Object -Last 1
+if ($flow) {
+    $f = @(Read-Tail $flow.FullName 1)[0].Split(',')
+    "`nFlow of minute {0} UTC (values {1}, yesterday's levels {2}):" -f $f[0], $(if ($f[22] -eq "1") { "complete" } else { "incomplete until 22:00 UTC" }), $(if ($f[23] -eq "1") { "complete" } else { "not yet" })
+    "  delta {0}   CVD {1}   day VWAP {2} (sd {3})   session VWAP {4}" -f $f[2], $f[3], $f[4], $f[5], $f[6]
+    "  profile today: POC {0}, value area {1} .. {2}   yesterday: POC {3}, value area {4} .. {5}" -f $f[7], $f[9], $f[8], $f[10], $f[12], $f[11]
+    "  levels: yesterday {0} / {1}   Asia {2} / {3}   last 60 min {4} / {5}   sweep '{6}'   ladder {7} / {8}" -f $f[13], $f[14], $f[17], $f[18], $f[19], $f[20], $f[21], $f[24], $f[25]
+    $sweeps = @(Get-Content $flow.FullName | Where-Object { $_ -match ',[PAR][HL][,|]' })
+    "  sweeps recorded this month: {0}" -f $sweeps.Count
+}
+
 "`nFiles per day:"
 $files | Where-Object { $_.Name -match '^(tick|book)-' } | Sort-Object Name | Select-Object -Last 8 |
     ForEach-Object { "  {0,-28} {1,8:N0} KB" -f $_.Name, ($_.Length / 1KB) }

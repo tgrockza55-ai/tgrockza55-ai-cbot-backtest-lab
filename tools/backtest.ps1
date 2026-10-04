@@ -30,7 +30,8 @@ param(
     [switch]$SaveLocal,                              # also write the report to Documents\BacktestLab\local\<code>-<symbol>-<tf>.json
     [switch]$CliReport,                              # keep ctrader-cli's own (very large) JSON report next to the log
     [switch]$Dump,                                   # SCALP_S3D only: write every prediction to Documents\BacktestLab\data\scalp-dump.csv (parity check)
-    [switch]$Record,                                 # test the live recorder inside a backtest: writes %LOCALAPPDATA%\BacktestLab\live-test (no market depth)
+    [switch]$Record,                                 # run the live recorder inside a backtest: writes %LOCALAPPDATA%\BacktestLab\live-test (no market depth)
+    [string]$RecordTo = "",                          # the same, into another folder name under %LOCALAPPDATA%\BacktestLab (never "live")
     [switch]$Build,
     [int]$TimeoutMinutes = 30
 )
@@ -174,7 +175,7 @@ Send-Progress "Starting" 0 "running" $null
 $runStarted = (Get-Date).AddSeconds(-5)
 $sw = [Diagnostics.Stopwatch]::StartNew()
 if ($Dump) { $env:BACKTESTLAB_DUMP = "1" }
-if ($Record) { $env:BACKTESTLAB_RECORD = "1" }
+if ($RecordTo) { $env:BACKTESTLAB_RECORD = $RecordTo } elseif ($Record) { $env:BACKTESTLAB_RECORD = "live-test" }
 $ok = Invoke-Cli ($a -join " ") $log ($TimeoutMinutes * 60) "] stopped." $tick
 $env:BACKTESTLAB_DUMP = $null
 $env:BACKTESTLAB_RECORD = $null
