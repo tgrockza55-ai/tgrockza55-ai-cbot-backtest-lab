@@ -5,6 +5,7 @@
 //   GET  /runs?limit=50       รายการผลสรุป            (x-ingest-key หรือ Bearer JWT ของเจ้าของ)
 //   GET  /runs/:id            ผลสรุป 1 run + ทฤษฎี
 //   GET  /runs/:id/file       trades + equity เต็มจาก Google Drive
+//   POST /progress            ความคืบหน้าของ backtest ที่กำลังรัน (header x-ingest-key) → ตาราง backtest_jobs
 //   DELETE /runs/:id          ลบ run + ย้ายไฟล์ Drive ลงถังขยะ (ทฤษฎีที่ไม่เหลือ run และไม่มีโน้ตจะถูกลบด้วย)
 //   GET  /health              เช็คว่าตั้งค่าครบ
 //
@@ -221,7 +222,26 @@ async function ingest(req: Request, owner: string) {
   return json({ ok: true, runId: run.id, strategyId: strat.id, driveFileId, driveError });
 }
 
-const RUN_FIELDS = "*, strategy:strategies(id, code, version, name, theory, entry_rules, exit_rules, param_names, notes)";
+/** tools\backtest.ps1 เรียกทุกไม่กี่วินาทีระหว่างรัน — เก็บสถานะล่าสุดของงานนั้น (หน้าเว็บอ่านตารางเองผ่าน RLS) */
+async function progress(req: Request, owner: string) {
+  // deno-lint-ignore no-explicit-any
+  let p: any;
+  try { p = await req.json(); } catch { throw new HttpError(400, "body must be JSON"); }
+  if (!p?.id || !p?.strategyCode) throw new HttpError(400, "required: id, strategyCode");
+
+  const text = (v: unknown, max = 200) => (v == null || v === "" ? null : String(v).slice(0, max));
+  const status = ["running", "done", "failed"].includes(p.status) ? p.status : "running";
+  const { error } = await admin.from("backtest_jobs").upsert({
+    id: String(p.id).slice(0, 200), owner, strategy_code: String(p.strategyCode).slice(0, 100),
+    symbol: text(p.symbol), timeframe: text(p.timeframe), date_from: text(p.dateFrom), date_to: text(p.dateTo),
+    phase: text(p.phase), percent: num(p.percent), status, run_id: num(p.runId),
+    machine: text(p.machine), note: text(p.note, 500), updated_at: new Date().toISOString(),
+  }, { onConflict: "id" });
+  if (error) throw new Error(`backtest_jobs: ${error.message}`);
+  return json({ ok: true });
+}
+
+const RUN_FIELDS ="*, strategy:strategies(id, code, version, name, theory, entry_rules, exit_rules, param_names, notes)";
 
 async function listRuns(url: URL, owner: string) {
   const limit = Math.min(Number(url.searchParams.get("limit") ?? 50) || 50, 1000);
@@ -290,6 +310,9 @@ Deno.serve(async (req) => {
     }
     if (req.method === "POST" && route[0] === "ingest") {
       return await ingest(req, await authorize(req, false));
+    }
+    if (req.method === "POST" && route[0] === "progress") {
+      return await progress(req, await authorize(req, false));
     }
     if (req.method === "DELETE" && route[0] === "runs" && route.length === 2) {
       const owner = await authorize(req, true);

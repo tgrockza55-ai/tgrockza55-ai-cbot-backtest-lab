@@ -24,6 +24,7 @@ param(
     [Nullable[double]]$Commission,                   # per million; CLI default 0
     [Nullable[double]]$MinStopPct, [Nullable[double]]$MaxStopPct,
     [string]$Note = "",
+    [string]$Step = "",                              # shown with the progress on the website, e.g. "3/10"
     [switch]$Build,
     [int]$TimeoutMinutes = 30
 )
@@ -59,7 +60,7 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 # Run ctrader-cli with a time limit. It does not always exit by itself after a backtest,
 # so stop it once $doneMarker has appeared in the output.
-function Invoke-Cli([string]$arguments, [string]$logFile, [int]$timeoutSec, [string]$doneMarker) {
+function Invoke-Cli([string]$arguments, [string]$logFile, [int]$timeoutSec, [string]$doneMarker, [scriptblock]$onTick) {
     $errFile = "$logFile.err"
     $proc = Start-Process -FilePath $cli -ArgumentList $arguments -NoNewWindow -PassThru `
         -RedirectStandardOutput $logFile -RedirectStandardError $errFile
@@ -67,6 +68,7 @@ function Invoke-Cli([string]$arguments, [string]$logFile, [int]$timeoutSec, [str
     $doneAt = $null
     while (-not $proc.HasExited) {
         Start-Sleep -Seconds 2
+        if ($onTick) { & $onTick $logFile }
         if ($doneMarker -and -not $doneAt) {
             $hit = Select-String -Path $logFile -Pattern $doneMarker -SimpleMatch -Quiet -ErrorAction SilentlyContinue
             if ($hit) { $doneAt = $sw.Elapsed.TotalSeconds }
@@ -125,12 +127,49 @@ foreach ($k in $named.Keys) {
 }
 if ($Note) { $a += ('"--RunNote={0}"' -f $Note) }
 
+# ---- progress for the website: POST /progress on the lab (needs the backtest_jobs table + current lab function) ----
+$labCfgFile = Join-Path $lab "config.json"
+$labCfg = if (Test-Path $labCfgFile) { Get-Content $labCfgFile -Raw | ConvertFrom-Json } else { $null }
+$jobId = "{0}-{1}-{2}-{3}" -f $stamp, $Strategy, $Symbol, $Period
+$script:progressOn = [bool]$labCfg
+$script:lastSent = ""
+
+function Send-Progress([string]$phase, $percent, [string]$status, $runId) {
+    if (-not $script:progressOn) { return }
+    $key = "$phase|$percent|$status"
+    if ($key -eq $script:lastSent) { return }
+    $script:lastSent = $key
+    $body = @{ id = $jobId; strategyCode = $Strategy; symbol = $Symbol; timeframe = $Period; dateFrom = $Start; dateTo = $End
+        phase = $phase; percent = $percent; status = $status; runId = $runId; machine = $env:COMPUTERNAME
+        note = (@($Step, $Note) | Where-Object { $_ }) -join " - " } | ConvertTo-Json -Compress
+    try {
+        Invoke-RestMethod -Method Post -Uri ($labCfg.apiUrl.TrimEnd('/') + "/progress") -TimeoutSec 5 `
+            -Headers @{ "x-ingest-key" = $labCfg.ingestKey } -ContentType "application/json; charset=utf-8" `
+            -Body ([Text.Encoding]::UTF8.GetBytes($body)) | Out-Null
+    } catch {
+        $script:progressOn = $false     # lab not updated yet, or offline: never let this disturb the backtest
+    }
+}
+
+$tick = {
+    param($logFile)
+    $last = Get-Content $logFile -Tail 20 -ErrorAction SilentlyContinue | Where-Object { $_ -match '^Progress \| (.+?) \| ([\d.]+) %' } | Select-Object -Last 1
+    if ($last -and $last -match '^Progress \| (.+?) \| ([\d.]+) %') {
+        Send-Progress $Matches[1] ([math]::Floor([double]::Parse($Matches[2], $inv))) "running" $null
+    }
+}
+
 Write-Host ("Backtest {0} {1} {2}  {3} -> {4}" -f $Strategy, $Symbol, $Period, $Start, $End) -ForegroundColor Cyan
+Send-Progress "Starting" 0 "running" $null
 $sw = [Diagnostics.Stopwatch]::StartNew()
-$ok = Invoke-Cli ($a -join " ") $log ($TimeoutMinutes * 60) "] stopped."
+$ok = Invoke-Cli ($a -join " ") $log ($TimeoutMinutes * 60) "] stopped." $tick
 Write-Host ("Finished in {0} s. Log: {1}" -f [int]$sw.Elapsed.TotalSeconds, $log)
 
 $lines = @(Get-Content $log -ErrorAction SilentlyContinue) + @(Get-Content "$log.err" -ErrorAction SilentlyContinue)
+$sent = $lines | Where-Object { $_ -match 'Sent to lab: .*"runId":(\d+)' } | Select-Object -Last 1
+$runId = if ($sent -and $sent -match '"runId":(\d+)') { [int]$Matches[1] } else { $null }
+$isUtility = [bool]($lines -match 'Exported \d+ bars')
+Send-Progress "Finished" 100 $(if ($ok -and ($runId -or $isUtility)) { "done" } else { "failed" }) $runId
 $lines | Where-Object { $_ -match 'Sent to lab|Lab responded|Send failed|Saved for retry|Missing config|config\.json error|Unknown strategy|Crashed|Exception|^Error|Exported ' } |
     ForEach-Object { $_.Replace($ctid, "<ctid>") }
 

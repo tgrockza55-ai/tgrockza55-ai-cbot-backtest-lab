@@ -118,6 +118,45 @@ export function splitBar(a, b, labelA = "ชนะ", labelB = "แพ้") {
     h("span", { class: "up", style: `width:${a}%` }), h("span", { class: "down", style: `width:${b}%` }));
 }
 
+// ---------- ความคืบหน้าของ backtest ที่กำลังรัน (ตาราง backtest_jobs; tools\backtest.ps1 ส่งมาผ่าน lab) ----------
+const PHASES = { Starting: "กำลังเริ่ม", Backtesting: "กำลังทดสอบ", Finished: "เสร็จ" };
+const phaseLabel = (p) => PHASES[p] ?? (p?.startsWith("Loading") ? `โหลดข้อมูล ${p.replace(/^Loading\s*/, "")}` : p ?? "");
+
+/** แสดงงานที่กำลังรัน + งานที่เพิ่งจบ ไว้บนสุดของ <main>; เงียบถ้ายังไม่มีตาราง */
+export function mountJobs() {
+  const box = h("section", { class: "stack jobs", "aria-live": "polite" });
+  $("main").prepend(box);
+
+  async function refresh() {
+    const since = new Date(Date.now() - 30 * 60000).toISOString();
+    const { data, error } = await sb.from("backtest_jobs").select("*").gte("updated_at", since)
+      .order("started_at", { ascending: false }).limit(30);
+    if (error) return;                                   // ยังไม่ได้สร้างตาราง → ไม่แสดงอะไร และเลิกถาม
+
+    const now = Date.now();
+    const rows = data.map((j) => ({ ...j, stale: j.status === "running" && now - new Date(j.updated_at) > 120000 }));
+    const running = rows.filter((j) => j.status === "running" && !j.stale);
+    box.replaceChildren(...(rows.length ? [
+      h("h2", {}, running.length ? `กำลังทดสอบ (${running.length})` : "ทดสอบล่าสุด (30 นาที)"),
+      h("div", { class: "table-wrap" }, h("table", {}, h("tbody", {}, rows.map((j) => h("tr", {},
+        h("td", { class: "mono" }, j.strategy_code),
+        h("td", {}, `${j.symbol ?? ""} · ${j.timeframe ?? ""}`),
+        h("td", { class: "muted" }, `${j.date_from ?? ""} → ${j.date_to ?? ""}`),
+        h("td", {}, j.status === "running" && !j.stale
+          ? [h("progress", { max: 100, value: j.percent ?? 0, "aria-label": `${j.strategy_code} ${j.percent ?? 0}%` }),
+             h("span", { class: "mono" }, ` ${Math.round(j.percent ?? 0)}%`), h("span", { class: "muted" }, ` ${phaseLabel(j.phase)}`)]
+          : j.stale ? h("span", { class: "muted" }, `ไม่มีสัญญาณจากเครื่องที่รัน (ค้างที่ ${Math.round(j.percent ?? 0)}%)`)
+          : j.status === "done" ? (j.run_id ? h("a", { href: `run.html?id=${j.run_id}` }, `เสร็จแล้ว · ดูผล #${j.run_id}`) : "เสร็จแล้ว")
+          : h("span", { class: "neg" }, "ไม่สำเร็จ")),
+        h("td", { class: "muted" }, j.note ?? ""),
+        h("td", { class: "muted" }, j.machine ?? ""),
+      ))))),
+    ] : []));
+    setTimeout(refresh, running.length ? 3000 : 20000);
+  }
+  refresh();
+}
+
 export function showError(err) {
   console.error(err);
   $("main").append(h("p", { class: "error" }, `เกิดข้อผิดพลาด: ${err.message ?? err}`));

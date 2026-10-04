@@ -14,7 +14,8 @@ cbot/BacktestLab/            ซอร์ส cBot (C#, cTrader Automate .NET 6)
   SwingTracker.cs            หาจุดสวิงสูง/ต่ำแบบไม่มี look-ahead ใช้ร่วมกันในทฤษฎีกราฟ
   Reporter.cs                POST ไป /ingest, เก็บ pending เมื่อส่งไม่ได้
 supabase/schema.sql          ตาราง strategies, backtest_runs, view strategy_stats + RLS
-supabase/functions/lab/      Edge Function: /ingest, /runs, /runs/:id, /runs/:id/file, /health
+supabase/migrations/*.sql    ส่วนเพิ่มของ schema (เช่น backtest_jobs) — ผู้ใช้รันใน SQL Editor ทีละไฟล์
+supabase/functions/lab/      Edge Function: /ingest, /progress, /runs, /runs/:id (GET, DELETE), /runs/:id/file, /health
 docs/                        เว็บ (GitHub Pages): index, run, strategies, chart (ทฤษฎีกราฟ), daystudy (สถิติรายวัน) + app.js, config.js
 docs/data/daystudy-*.json    ผลสถิติรายวัน (สร้างโดย tools\day-study.ps1; เป็นไฟล์สาธารณะ)
 tools/sync-cbot.ps1          ก๊อปซอร์สไป Documents\cAlgo\Sources\Robots\BacktestLab\BacktestLab + สร้าง config
@@ -34,7 +35,8 @@ tools/day-study.ps1          สถิติ "วันนี้ของสั�
 5. หลีกเลี่ยง look-ahead: ห้ามใช้ `.LastValue` ของแท่งที่ยังไม่ปิดในการตัดสินใจ
 6. Build + backtest: ถ้าเครื่องมี cTrader CLI ให้ใช้ `tools\backtest.ps1 -Build ...` (ดูหัวข้อถัดไป)
    ถ้าไม่มี ให้รัน `tools\sync-cbot.ps1` แล้วบอกผู้ใช้ให้กด Build + ตั้งค่า backtest ใน cTrader เอง
-7. แนะนำผู้ใช้ให้ `git commit` + `git push` เพื่อใช้บนเครื่องอื่น (ถามผู้ใช้ก่อนทุกครั้ง)
+7. `git commit` + `git push` ได้เลยโดยไม่ต้องถาม (ผู้ใช้อนุญาตแล้ว: เว็บนี้เป็นข้อมูลแสดงอย่างเดียว) แล้วรายงานว่า push อะไรไป
+   ยกเว้น: ห้ามมีความลับในไฟล์, การลบ run และการ deploy Edge Function ยังให้ผู้ใช้ทำเอง
 8. cAlgo.API มีชนิดชื่อซ้ำกับ .NET (`File`, `HttpMethod`) — ถ้าใช้ `System.IO` / `System.Net.Http` ให้ใส่ `using X = ...;` กำกับ
 9. จัดรูปแบบวันที่/ตัวเลขเป็นข้อความต้องใส่ `CultureInfo.InvariantCulture` เสมอ (เครื่องภาษาไทยจะได้ปี พ.ศ.)
 
@@ -77,6 +79,8 @@ powershell -ExecutionPolicy Bypass -File tools\backtest.ps1 -Strategy EMA_CROSS 
 ```
 
 - สำเร็จเมื่อเห็น `Sent to lab: {"ok":true,"runId":N,...,"driveError":null}` (exit code 0; 2 = ไม่ยืนยันว่าส่งถึง lab)
+- ผลขึ้น lab/เว็บเองทันทีที่จบ (cBot ส่งเอง ไม่เกี่ยวกับ git) และระหว่างรันสคริปต์ส่งความคืบหน้า % ไป `POST /progress`
+  → ตาราง `backtest_jobs` → แถบ "กำลังทดสอบ" บนหน้าแรกและหน้าทฤษฎีกราฟ; รันหลายตัวต่อกันให้ใส่ `-Step "3/10"`
 - log เต็มอยู่ที่ `Documents\BacktestLab\logs\`
 - วันที่เป็น `dd/MM/yyyy HH:mm` (UTC) และวัน `-End` ถูกนับรวมทั้งวัน
 - **ใส่ `-Spread` ทุกครั้ง** (หน่วย pips): กับข้อมูล m1 ค่าเริ่มต้นของ CLI คือสเปรด 0 และ commission 0 ผลจะดีเกินจริงมาก

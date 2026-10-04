@@ -10,7 +10,7 @@
 <main class="stack" id="main"><p class="muted">กำลังโหลด…</p></main>
 <script type="module">
 import { sb, requireSession, labApi, h, $, money, pct, num, date, signClass, describe, showError,
-  WEEKDAYS, weekdayStats } from "./app.js";
+  WEEKDAYS, weekdayStats, mountJobs } from "./app.js";
 
 // ทฤษฎีกราฟ = ทฤษฎีที่ใช้ราคาอย่างเดียว (Code ขึ้นต้นด้วย CH_)
 const PREFIX = "CH_";
@@ -128,7 +128,9 @@ function card(s) {
 }
 
 function render() {
+  const jobs = $("#main .jobs");                 // แถบความคืบหน้าอยู่นอกการวาดซ้ำ
   $("#main").replaceChildren(
+    jobs,
     h("div", {},
       h("h1", {}, "ทฤษฎีกราฟ"),
       h("p", { class: "muted" }, "ทฤษฎีที่ตัดสินใจจากราคาอย่างเดียว ไม่ใช้อินดิเคเตอร์ — เบรกกรอบ แท่งเทียนกลับตัว ทรงกลับตัว แนวรับแนวต้าน")),
@@ -158,6 +160,7 @@ if (session) {
     if (e1 || e2) throw e1 ?? e2;
     strategies = st;
     runs = rs;
+    mountJobs();
     render();
     loadWeekdays();
   } catch (e) { $("#main").replaceChildren(); showError(e); }

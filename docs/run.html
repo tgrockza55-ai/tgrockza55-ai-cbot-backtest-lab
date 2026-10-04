@@ -136,10 +136,11 @@ const s = (tag, attrs = {}, ...kids) => {
   el.append(...kids);
   return el;
 };
-const hhmm = (unix) => new Date(unix * 1000).toISOString().slice(11, 16);
+// เวลาท้องถิ่นของผู้ดู ให้ตรงกับหัวกราฟและตารางเทรด
+const hhmm = (unix) => new Date(unix * 1000).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" });
 
 function candleChart(t) {
-  const W = 560, H = 250, L = 8, R = 58, T = 10, B = 20;
+  const W = 560, H = 250, L = 8, R = 88, T = 10, B = 20;
   const bars = t.bars, n = bars.length;
   const entryUnix = Date.parse(t.entryTime) / 1000, exitUnix = Date.parse(t.exitTime) / 1000;
   const indexAt = (unix) => { let i = 0; while (i + 1 < n && bars[i + 1][0] <= unix) i++; return i; };
@@ -155,7 +156,7 @@ function candleChart(t) {
   bars.forEach((b, i) => {
     const up = b[4] >= b[1], top = y(Math.max(b[1], b[4])), bottom = y(Math.min(b[1], b[4]));
     svg.append(s("g", { class: up ? "cu" : "cd" },
-      s("title", {}, `${hhmm(b[0])} UTC  O ${b[1]}  H ${b[2]}  L ${b[3]}  C ${b[4]}`),
+      s("title", {}, `${hhmm(b[0])}  O ${b[1]}  H ${b[2]}  L ${b[3]}  C ${b[4]}`),
       s("line", { x1: x(i), x2: x(i), y1: y(b[2]), y2: y(b[3]), "stroke-width": 1 }),
       s("rect", { x: x(i) - bw / 2, y: top, width: bw, height: Math.max(1, bottom - top), "stroke-width": 0 })));
   });
@@ -171,7 +172,7 @@ function candleChart(t) {
     s("text", { x: x(ei), y: H - 6, "text-anchor": "middle" }, `เข้า ${hhmm(entryUnix)}`));
   if (exitShown) svg.append(
     s("line", { class: "path", x1: x(ei), y1: y(t.entryPrice), x2: x(xi), y2: y(t.exitPrice) }),
-    s("circle", { class: "dot", cx: x(xi), cy: y(t.exitPrice), r: 4 }, s("title", {}, `ออก ${hhmm(exitUnix)} UTC ที่ ${t.exitPrice}`)));
+    s("circle", { class: "dot", cx: x(xi), cy: y(t.exitPrice), r: 4 }, s("title", {}, `ออก ${hhmm(exitUnix)} ที่ ${t.exitPrice}`)));
   svg.append(s("circle", { class: "dot", cx: x(ei), cy: y(t.entryPrice), r: 4 }, s("title", {}, `เข้า ${t.side} ที่ ${t.entryPrice}`)));
   return svg;
 }
