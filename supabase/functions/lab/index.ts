@@ -5,6 +5,7 @@
 //   GET  /runs?limit=50       รายการผลสรุป            (x-ingest-key หรือ Bearer JWT ของเจ้าของ)
 //   GET  /runs/:id            ผลสรุป 1 run + ทฤษฎี
 //   GET  /runs/:id/file       trades + equity เต็มจาก Google Drive
+//   DELETE /runs/:id          ลบ run + ย้ายไฟล์ Drive ลงถังขยะ (ทฤษฎีที่ไม่เหลือ run และไม่มีโน้ตจะถูกลบด้วย)
 //   GET  /health              เช็คว่าตั้งค่าครบ
 //
 // Secrets ที่ต้องตั้ง (Dashboard → Edge Functions → Secrets):
@@ -28,7 +29,7 @@ const admin = createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY")
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-ingest-key",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
 };
 
 const json = (body: unknown, status = 200) =>
@@ -242,6 +243,36 @@ async function getRun(id: number, owner: string) {
   return data;
 }
 
+async function deleteRun(id: number, owner: string) {
+  const run = await getRun(id, owner);
+
+  // ไฟล์ Drive ลงถังขยะ (กู้คืนได้ 30 วัน); ถ้าพังยังลบแถวต่อ แล้วแจ้ง error กลับ
+  let driveError: string | null = null;
+  if (run.drive_file_id) {
+    try {
+      await driveFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(run.drive_file_id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trashed: true }),
+      });
+    } catch (err) {
+      driveError = String((err as Error).message ?? err).slice(0, 500);
+    }
+  }
+
+  const { error } = await admin.from("backtest_runs").delete().eq("owner", owner).eq("id", id);
+  if (error) throw new Error(`backtest_runs: ${error.message}`);
+
+  let strategyRemoved = false;
+  const { count } = await admin.from("backtest_runs").select("id", { count: "exact", head: true })
+    .eq("strategy_id", run.strategy_id);
+  if (count === 0 && !run.strategy?.notes) {
+    const { error: e2 } = await admin.from("strategies").delete().eq("owner", owner).eq("id", run.strategy_id);
+    strategyRemoved = !e2;
+  }
+  return json({ ok: true, runId: id, driveTrashed: !!run.drive_file_id && !driveError, driveError, strategyRemoved });
+}
+
 // ---------------------------------------------------------------- router
 
 Deno.serve(async (req) => {
@@ -259,6 +290,12 @@ Deno.serve(async (req) => {
     }
     if (req.method === "POST" && route[0] === "ingest") {
       return await ingest(req, await authorize(req, false));
+    }
+    if (req.method === "DELETE" && route[0] === "runs" && route.length === 2) {
+      const owner = await authorize(req, true);
+      const id = Number(route[1]);
+      if (!Number.isInteger(id)) throw new HttpError(400, "bad run id");
+      return await deleteRun(id, owner);
     }
     if (req.method === "GET" && route[0] === "runs") {
       const owner = await authorize(req, true);

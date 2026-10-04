@@ -49,6 +49,32 @@ function noteCard(run) {
   );
 }
 
+/** ลบแถวใน Supabase + ย้ายไฟล์ Drive ลงถังขยะ (ผ่าน "lab"); ถ้า lab ยังเป็นรุ่นเก่า ลบได้แค่แถว */
+async function deleteRun(run, status) {
+  if (!confirm(`ลบรอบทดสอบ #${run.id} ถาวร?\nไฟล์รายละเอียดใน Google Drive จะถูกย้ายลงถังขยะ`)) return;
+  status.textContent = "กำลังลบ…";
+  let message = "";
+  try {
+    const res = await labApi(`/runs/${run.id}`, "DELETE");
+    if (res.driveError) message = `ลบแล้ว แต่ย้ายไฟล์ Drive ลงถังขยะไม่ได้: ${res.driveError}`;
+  } catch (apiError) {
+    const { data, error } = await sb.from("backtest_runs").delete().eq("id", run.id).select("id");
+    if (error || !data?.length) {
+      status.textContent = `ลบไม่ได้: ${error?.message ?? apiError.message}`;
+      return;
+    }
+    message = "ลบจากฐานข้อมูลแล้ว แต่ไฟล์ใน Google Drive ยังอยู่ (Edge Function lab ยังไม่รองรับการลบ)";
+  }
+  if (message) alert(message);
+  location.href = "index.html";
+}
+
+function dangerCard(run) {
+  const status = h("span", { class: "muted" });
+  return h("section", { class: "toolbar" },
+    h("button", { class: "danger", onclick: () => deleteRun(run, status) }, "ลบรอบทดสอบนี้"), status);
+}
+
 function equityChart(canvas, points, startBalance) {
   const css = getComputedStyle(document.documentElement);
   const accent = css.getPropertyValue("--accent").trim(), grid = css.getPropertyValue("--border").trim(), muted = css.getPropertyValue("--muted").trim();
@@ -126,6 +152,7 @@ if (session) {
       h("div", { class: "grid two" }, theoryCard(run), noteCard(run)),
       h("section", { class: "card" }, h("h2", {}, "Equity"), h("div", { class: "chart-box" }, canvas)),
       fileArea,
+      dangerCard(run),
     );
 
     if (!run.drive_file_id) {

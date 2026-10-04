@@ -76,6 +76,8 @@ curl -s -H "x-ingest-key: $KEY" "$API/runs?limit=200"
 curl -s -H "x-ingest-key: $KEY" "$API/runs/42"
 # trades + equity เต็มจาก Drive
 curl -s -H "x-ingest-key: $KEY" "$API/runs/42/file"
+# ลบ run (แถวใน DB + ไฟล์ Drive ลงถังขยะ) — ถามผู้ใช้ก่อนทุกครั้ง; บนเว็บมีปุ่ม "ลบรอบทดสอบนี้" ในหน้า run
+curl -s -X DELETE -H "x-ingest-key: $KEY" "$API/runs/42"
 ```
 
 ฟิลด์สำคัญของ run: `net_profit`, `win_rate` (%), `profit_factor`, `max_dd_pct` (%), `total_trades`, `params`,

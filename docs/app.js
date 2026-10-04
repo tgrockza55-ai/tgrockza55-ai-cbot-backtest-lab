@@ -58,9 +58,10 @@ export async function requireSession() {
 }
 
 /** เรียก Edge Function "lab" ด้วย JWT ของเรา */
-export async function labApi(path) {
+export async function labApi(path, method = "GET") {
   const { data: { session } } = await sb.auth.getSession();
   const res = await fetch(`${LAB_API}${path}`, {
+    method,
     headers: { Authorization: `Bearer ${session?.access_token}`, apikey: SUPABASE_ANON_KEY },
   });
   const body = await res.json().catch(() => ({}));
