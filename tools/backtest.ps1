@@ -177,7 +177,7 @@ $lines = @(Get-Content $log -ErrorAction SilentlyContinue) + @(Get-Content "$log
 $sent = $lines | Where-Object { $_ -match 'Sent to lab: .*"runId":(\d+)' } | Select-Object -Last 1
 $runId = if ($sent -and $sent -match '"runId":(\d+)') { [int]$Matches[1] } else { $null }
 $isUtility = [bool]($lines -match 'Exported \d+ bars|Saved local copy')
-Send-Progress "Finished" 100 $(if ($ok -and ($runId -or $isUtility)) { "done" } else { "failed" }) $runId
+Send-Progress "Finished" 100 $(if ($ok -and ($runId -or $isUtility -or $NoSend)) { "done" } else { "failed" }) $runId
 $lines | Where-Object { $_ -match 'Sent to lab|Lab responded|Send failed|Saved for retry|Missing config|config\.json error|Unknown strategy|Crashed|Exception|^Error|Exported |Saved local copy' } |
     ForEach-Object { $_.Replace($ctid, "<ctid>") }
 
