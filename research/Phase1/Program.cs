@@ -129,9 +129,9 @@ static partial class Phase1
         Console.WriteLine($"bars: {T.Length:N0}  {Date(T[0])} .. {Date(T[T.Length - 1])}   cost per trade: {FixedCost} + {CommissionRate * 1e6:N0} per million round trip (= {Cost(0):N3} at {C[0]:N0}, {Cost(T.Length - 1):N3} at {C[T.Length - 1]:N0})");
         HasNews = LoadNews(docs);
         SymbolName = symbol;
-        if (study != null && study != "h9" && study != "h10" && study != "s3" && study != "s3x" && study != "parity") return RunStudy(study, period);
+        if (study != null && study != "h9" && study != "h10" && study != "h11" && study != "lx" && study != "s3" && study != "s3x" && study != "parity") return RunStudy(study, period);
         BuildFeatures();
-        if (study == "h9" || study == "h10" || study == "s3" || study == "s3x" || study == "parity") return RunStudy(study, period);
+        if (study == "h9" || study == "h10" || study == "h11" || study == "lx" || study == "s3" || study == "s3x" || study == "parity") return RunStudy(study, period);
         if (predict) { SavePredictions(); return 0; }
         if (export) { ExportModels(docs, 5); return 0; }
         Console.WriteLine($"features: {BaseCount} price/volume" + (HasNews ? $" + {FeatureNames.Length - BaseCount} news/macro ({EvT.Length} scheduled releases, {MacroDay?.Length ?? 0} macro days)" : "  (no news cache: run tools\\news-fetch.ps1)"));
