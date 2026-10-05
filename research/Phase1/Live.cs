@@ -114,6 +114,8 @@ static partial class Phase1
             }
         Console.WriteLine($"signals of the rule: {rows.Count(r => r.Signal.Length > 0)}");
 
+        BookStudy(dir);
+
         // 6) real orders
         Console.WriteLine("\n-- 6) orders on the Demo account --");
         var tradeFile = Path.Combine(dir, "trades.csv");
@@ -132,6 +134,88 @@ static partial class Phase1
             Console.WriteLine($"result: net {net.Sum():+0.00;-0.00} USD   win {100.0 * net.Count(v => v > 0) / net.Count:N1}%   PF {(gl > 0 ? gw / gl : double.NaN):N2}   commissions {closes.Sum(p => Val(p[14])):N2}");
         }
         return 0;
+    }
+
+    // 7) the order book snapshots (every ~2 seconds) against the price a few seconds to minutes later.
+    // This broker's book for gold is a ladder of quotes for fixed sizes (100 / 150 / 250 / 500 / 1,000 oz per side). Two things vary:
+    //   volume  one side sometimes carries more size than the other (about 15% of the snapshots)
+    //   shape   how far the deepest quote sits from the best one, on each side
+    // "start" rows count only the first snapshot of each stretch in that state, so they are closer to independent events.
+    static void BookStudy(string dir)
+    {
+        var tickT = new List<double>(); var tickMid = new List<double>();
+        var rows = new List<(double t, double mid, int vol, int shape)>();
+        foreach (var file in Directory.GetFiles(dir, "tick-*.csv*").OrderBy(f => Path.GetFileName(f).Substring(5, 10)))
+        {
+            double day = new DateTimeOffset(DateTime.ParseExact(Path.GetFileName(file).Substring(5, 10), "yyyy-MM-dd", Inv), TimeSpan.Zero).ToUnixTimeSeconds();
+            foreach (var line in ReadMaybeGz(file).Skip(1))
+            {
+                var p = line.Split(','); if (p.Length < 3 || p[0].Length < 12) continue;
+                if (!double.TryParse(p[1], System.Globalization.NumberStyles.Float, Inv, out double bid) || !double.TryParse(p[2], System.Globalization.NumberStyles.Float, Inv, out double ask)) continue;
+                tickT.Add(day + TimeSpan.ParseExact(p[0], @"hh\:mm\:ss\.fff", Inv).TotalSeconds); tickMid.Add((bid + ask) / 2);
+            }
+        }
+        int ticks = tickT.Count; if (ticks < 1000) return;
+        double MidAt(double t)
+        {
+            int lo = 0, hi = ticks; while (lo < hi) { int m = (lo + hi) / 2; if (tickT[m] <= t) lo = m + 1; else hi = m; }
+            return lo == 0 || t - tickT[lo - 1] > 60 ? double.NaN : tickMid[lo - 1];              // no quote for a minute = market closed around it
+        }
+
+        int total = 0;
+        foreach (var file in Directory.GetFiles(dir, "book-*.csv*").OrderBy(f => Path.GetFileName(f).Substring(5, 10)))
+        {
+            double day = new DateTimeOffset(DateTime.ParseExact(Path.GetFileName(file).Substring(5, 10), "yyyy-MM-dd", Inv), TimeSpan.Zero).ToUnixTimeSeconds();
+            foreach (var line in ReadMaybeGz(file).Skip(1))
+            {
+                var p = line.Split(','); if (p.Length < 3 || p[0].Length < 12 || p[1].Length == 0 || p[2].Length == 0) continue;
+                (double price, double size)[] Side(string s) => s.Split('|').Select(x => x.Split(':')).Where(x => x.Length == 2)
+                    .Select(x => (double.Parse(x[0], Inv), double.Parse(x[1], Inv))).ToArray();
+                (double price, double size)[] bids, asks;
+                try { bids = Side(p[1]); asks = Side(p[2]); } catch (FormatException) { continue; }
+                if (bids.Length < 2 || asks.Length < 2) continue;
+                total++;
+                double t = day + TimeSpan.ParseExact(p[0], @"hh\:mm\:ss\.fff", Inv).TotalSeconds, mid = MidAt(t);
+                if (double.IsNaN(mid)) continue;
+                double bv = bids.Sum(x => x.size), av = asks.Sum(x => x.size), imb = (bv - av) / (bv + av);
+                double shape = (asks[asks.Length - 1].price - asks[0].price) - (bids[0].price - bids[bids.Length - 1].price);   // > 0: the ask ladder is stretched further
+                rows.Add((t, mid, imb > 0.05 ? 1 : imb < -0.05 ? -1 : 0, shape > 0.03 ? 1 : shape < -0.03 ? -1 : 0));
+            }
+        }
+        Console.WriteLine($"\n-- 7) order book snapshots: {total:N0}, with a price {rows.Count:N0} -> the mid price later (USD; + = up) --");
+        if (rows.Count < 2000) { Console.WriteLine("not enough snapshots yet"); return; }
+        int[] horizons = { 10, 30, 60, 300 };
+        Console.WriteLine("state                                   n     +10s     +30s     +60s    +300s   up after 60s   t (60s)");
+        void Line(string label, Func<(double t, double mid, int vol, int shape), int> state, int want, bool startsOnly)
+        {
+            var st = horizons.Select(_ => new St()).ToArray(); int up = 0, moved = 0, n = 0, prev = int.MinValue;
+            foreach (var r in rows)
+            {
+                int s = state(r); bool take = s == want && (!startsOnly || prev != want); prev = s;
+                if (!take) continue;
+                n++;
+                for (int h = 0; h < horizons.Length; h++) { double f = MidAt(r.t + horizons[h]); if (!double.IsNaN(f)) { st[h].Add(f - r.mid); if (horizons[h] == 60 && f != r.mid) { moved++; if (f > r.mid) up++; } } }
+            }
+            if (n < 30) { Console.WriteLine($"{label,-36} {n,5}  (too few)"); return; }
+            Console.WriteLine($"{label,-36} {n,5}  {st[0].Mean.ToString("+0.000;-0.000", Inv),7}  {st[1].Mean.ToString("+0.000;-0.000", Inv),7}  {st[2].Mean.ToString("+0.000;-0.000", Inv),7}  {st[3].Mean.ToString("+0.000;-0.000", Inv),7}   {(moved > 0 ? 100.0 * up / moved : double.NaN),10:N1}%   {st[2].TStat,6:N2}");
+        }
+        Line("all snapshots", r => 0, 0, false);
+        Line("more size on the bid side", r => r.vol, 1, false);
+        Line("more size on the ask side", r => r.vol, -1, false);
+        Line("  start of more size on the bid", r => r.vol, 1, true);
+        Line("  start of more size on the ask", r => r.vol, -1, true);
+        Line("ask ladder stretched (thin above)", r => r.shape, 1, false);
+        Line("bid ladder stretched (thin below)", r => r.shape, -1, false);
+        Line("  start of ask ladder stretched", r => r.shape, 1, true);
+        Line("  start of bid ladder stretched", r => r.shape, -1, true);
+    }
+
+    static IEnumerable<string> ReadMaybeGz(string file)
+    {
+        using var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using Stream s = file.EndsWith(".gz") ? new System.IO.Compression.GZipStream(fs, System.IO.Compression.CompressionMode.Decompress) : fs;
+        using var r = new StreamReader(s);
+        string line; while ((line = r.ReadLine()) != null) yield return line;
     }
 
     /// <summary>The cBot keeps these files open for writing: read them without locking it out.</summary>
