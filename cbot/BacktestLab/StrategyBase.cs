@@ -57,6 +57,9 @@ namespace cAlgo.Robots
         /// <summary>เรียกทุกครั้งที่แท่งใหม่เปิด — ใช้ค่าแท่งที่ปิดแล้ว (.Last(1))</summary>
         public abstract TradeType? Signal();
 
+        /// <summary>เรียกทุก tick — สำหรับทฤษฎีที่ต้องสะสมค่าระดับ tick (เช่น volume profile); การตัดสินใจยังอยู่ที่ Signal()</summary>
+        public virtual void OnTick() { }
+
         /// <summary>เงื่อนไขออกเพิ่มเติมนอกจาก SL/TP และสัญญาณตรงข้าม</summary>
         public virtual bool ShouldExit(Position position) => false;
 

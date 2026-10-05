@@ -383,6 +383,79 @@ static partial class Phase1
             Replay("AB  Asia range break -> follow, hold 30", asia[0], 30, StopUsd);
         }
 
+        // ------------------------------------------------------------------ 6) second batch: decisions at the session opens and bigger liquidity pools
+        // The first batch lost to the cost almost everywhere, so these aim at moves several times the cost (hold 30-120 minutes).
+        Console.WriteLine("\n-- 6) SECOND BATCH (stop " + StopUsd.ToString("0.#", Inv) + "): session opens, opening range, round numbers, session CVD --");
+        {
+            var valueLon = new List<(int, int)>(); var valueNy = new List<(int, int)>(); var insideLon = new List<(int, int)>(); var insideNy = new List<(int, int)>();
+            var vwapLon = new List<(int, int)>(); var vwapNy = new List<(int, int)>();
+            var cvdAgree = new List<(int, int)>(); var cvdDiverge = new List<(int, int)>();
+            var orLon = new List<(int, int)>(); var orNy = new List<(int, int)>(); var round = new List<(int, int)>(); var roundBreak = new List<(int, int)>();
+            double orHigh = 0, orLow = 0; long orEnd = -1, orUntil = -1; bool orDone = true, orIsNy = false;
+            for (int m = 131; m < n - 1; m++)
+            {
+                long sod = T[m] % 86400; double u = usualRng[m - 1];
+                bool usable = T[m] - T[m - 60] == 3600 && u > 0 && !NearNews(T[m] + 60);
+
+                // a) the minute that closes at 07:00 / 13:00 UTC: where is the price against yesterday's value area and today's VWAP?
+                if (usable && (sod == 7 * 3600 - 60 || sod == 13 * 3600 - 60))
+                {
+                    bool ny = sod > 8 * 3600;
+                    if (!double.IsNaN(prevVah[m]))
+                    {
+                        if (C[m] > prevVah[m]) (ny ? valueNy : valueLon).Add((m, 1));
+                        else if (C[m] < prevVal[m]) (ny ? valueNy : valueLon).Add((m, -1));
+                        else if (C[m] != prevPoc[m]) (ny ? insideNy : insideLon).Add((m, Math.Sign(prevPoc[m] - C[m])));      // inside value -> towards the POC
+                    }
+                    if (sdDay[m] > 0 && Math.Abs(C[m] - vwapDay[m]) >= sdDay[m]) (ny ? vwapNy : vwapLon).Add((m, Math.Sign(C[m] - vwapDay[m])));
+                    // d) New York open: did the CVD of the London session go the same way as the price?
+                    if (ny && index.TryGetValue(T[m] - 6 * 3600, out int open) && Math.Abs(C[m] - C[open]) >= 5 * u)
+                    {
+                        int price = Math.Sign(C[m] - C[open]), flow = Math.Sign(cvd[m] - cvd[open]);
+                        if (flow == price) cvdAgree.Add((m, price)); else if (flow == -price) cvdDiverge.Add((m, flow));
+                    }
+                }
+
+                // b) opening range: the first 30 minutes of London (07:00) and of the New York cash session (13:30); first close outside it within 2 hours
+                if (sod == 7 * 3600 || sod == 13 * 3600 + 1800) { orHigh = H[m]; orLow = L[m]; orEnd = T[m] + 1800; orUntil = T[m] + 1800 + 7200; orDone = false; orIsNy = sod > 8 * 3600; }
+                else if (!orDone && T[m] < orEnd) { orHigh = Math.Max(orHigh, H[m]); orLow = Math.Min(orLow, L[m]); }
+                else if (!orDone && T[m] < orUntil)
+                {
+                    int side = C[m] > orHigh + 0.3 * u ? 1 : C[m] < orLow - 0.3 * u ? -1 : 0;
+                    if (side != 0) { orDone = true; if (usable) (orIsNy ? orNy : orLon).Add((m, side)); }
+                }
+                else orDone = true;
+
+                // c) round numbers (multiples of 50 USD) as liquidity pools: poked and closed back, or closed clearly beyond
+                if (usable && Hour(m) < 21)
+                {
+                    double level = Math.Round(C[m - 1] / 50) * 50;
+                    if (MaxH(m - 30, m - 1) <= level && H[m] > level + 0.3 * u && C[m] < level) round.Add((m, -1));
+                    else if (MinL(m - 30, m - 1) >= level && L[m] < level - 0.3 * u && C[m] > level) round.Add((m, 1));
+                    else if (MaxH(m - 30, m - 1) <= level && C[m] > level + u) roundBreak.Add((m, 1));
+                    else if (MinL(m - 30, m - 1) >= level && C[m] < level - u) roundBreak.Add((m, -1));
+                }
+            }
+            Rows("London open outside yesterday's value -> with it", valueLon, 30, 60, 120);
+            Rows("New York open outside yesterday's value -> with it", valueNy, 30, 60, 120);
+            Rows("London open inside value -> towards the POC", insideLon, 30, 60, 120);
+            Rows("New York open inside value -> towards the POC", insideNy, 30, 60, 120);
+            Rows("London open >= 1 sd from the day VWAP -> with it", vwapLon, 30, 60, 120);
+            Rows("New York open >= 1 sd from the day VWAP -> with it", vwapNy, 30, 60, 120);
+            Rows("NY open: London move confirmed by its CVD -> with it", cvdAgree, 30, 60, 120);
+            Rows("NY open: London move against its CVD -> with the CVD", cvdDiverge, 30, 60, 120);
+            Rows("London opening range (30 min) first break -> follow", orLon, 15, 30, 60);
+            Rows("New York opening range (30 min) first break -> follow", orNy, 15, 30, 60);
+            Rows("round 50 poked, closed back -> fade", round, 5, 15, 30);
+            Rows("round 50 clean break -> follow", roundBreak, 5, 15, 30);
+
+            // NYV (locked 05/10/2026 from 2024-01..2026-03): at 13:00 UTC, price above yesterday's value area -> buy, below it -> sell;
+            // hold 60 or 120 minutes, stop StopUsd. One decision per day, so there is nothing to overlap.
+            Console.WriteLine();
+            Replay("NYV New York open outside yesterday's value -> with it, hold 60", valueNy, 60, StopUsd);
+            Replay("NYV the same, hold 120", valueNy, 120, StopUsd);
+        }
+
         void Replay(string label, List<(int m, int side)> events, int hold, double stop)
         {
             var st = new St(); double gw = 0, gl = 0, cum = 0, peak = 0, maxDd = 0; long freeAt = 0; int stops = 0;

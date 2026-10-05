@@ -42,6 +42,27 @@ namespace cAlgo.Robots
         public bool PrevWarm { get; private set; }
         public bool HasState => _minute >= 0;
 
+        // ระดับของวันเทรดก่อนหน้า (NaN = ยังไม่มี) และค่าล่าสุดของวันนี้ ให้ทฤษฎีใช้ตัดสินใจ
+        public double PrevPoc => _prevPoc;
+        public double PrevVah => _prevVah;
+        public double PrevVal => _prevVal;
+        public double PrevHigh => _prevHigh;
+        public double PrevLow => _prevLow;
+        public double LastMid => _lastMid;
+        public double DayVwap => _count > 0 ? _sum / _count : double.NaN;
+
+        /// <summary>รันสด: ป้อน tick ย้อนหลังจาก cTrader (ย้อนไป 4 วัน ไม่เกิน 20 วินาที) เพื่อให้มีค่าของวันนี้และวันก่อนตั้งแต่เริ่ม — คืนจำนวน tick ที่ป้อน</summary>
+        public int WarmFromHistory(cAlgo.API.Ticks history, DateTime now)
+        {
+            if (history == null) return 0;
+            var from = now.AddDays(-4); var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (history.Count > 0 && history[0].Time > from && clock.Elapsed.TotalSeconds < 20)
+                if (history.LoadMoreHistory() <= 0) break;
+            for (int i = 0; i < history.Count; i++)
+                Feed(new DateTimeOffset(DateTime.SpecifyKind(history[i].Time, DateTimeKind.Utc)).ToUnixTimeSeconds(), history[i].Bid, history[i].Ask);
+            return history.Count;
+        }
+
         /// <summary>ป้อน tick ตามลำดับเวลา (unix วินาที UTC) — คืนแถวของนาทีที่เพิ่งปิดเมื่อ tick นี้เปิดนาทีใหม่ ไม่งั้นคืน null</summary>
         public string Feed(long unix, double bid, double ask)
         {

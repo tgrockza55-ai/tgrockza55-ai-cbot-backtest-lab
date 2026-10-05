@@ -195,11 +195,8 @@ namespace cAlgo.Robots
             {
                 if (history != null)
                 {
-                    var from = now.AddDays(-4); var clock = System.Diagnostics.Stopwatch.StartNew();
-                    while (history.Count > 0 && history[0].Time > from && clock.Elapsed.TotalSeconds < 20)
-                        if (history.LoadMoreHistory() <= 0) break;
-                    for (int i = 0; i < history.Count; i++) flow.Feed(Unix(history[i].Time), history[i].Bid, history[i].Ask);
-                    _bot.Print("Flow tracker: {0} historical ticks from {1:yyyy-MM-dd HH:mm}", history.Count, history.Count > 0 ? history[0].Time : now);
+                    int fed = flow.WarmFromHistory(history, now);
+                    _bot.Print("Flow tracker: {0} historical ticks from {1:yyyy-MM-dd HH:mm}", fed, fed > 0 ? history[0].Time : now);
                 }
             }
             catch (Exception e) { _bot.Print("Flow tracker: tick history not available: {0}", e.Message); flow = new FlowTracker(); }

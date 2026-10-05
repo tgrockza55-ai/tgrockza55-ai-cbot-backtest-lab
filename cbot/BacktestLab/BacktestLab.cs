@@ -190,6 +190,7 @@ namespace cAlgo.Robots
 
         protected override void OnTick()
         {
+            _strategy.OnTick();
             if (_recorder != null) _recorder.OnTick();
         }
 

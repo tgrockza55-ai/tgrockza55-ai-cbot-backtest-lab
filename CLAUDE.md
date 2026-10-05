@@ -111,6 +111,11 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
   `Phase1.exe flow` = ศึกษาระดับ tick 4 แนว (profile, sweep, VWAP, delta/CVD) บน 27 เดือน: แรงได้เปรียบก่อนต้นทุน ≈ 0 ทุกแนว; กฎ **PDX** ผ่าน dev ไม่ผ่าน test (JOURNAL ลูปที่ 9)
   ข้อจำกัดเชิงโครงสร้าง: SL 5 USD โดนแตะ 50%+ ของไม้ในตลาดปัจจุบัน (กรอบ ~2.3 USD/นาที) → ทุน 100 USD กับ 0.01 lot ไม่เข้ากับความผันผวนนี้ ต้องบอกผู้ใช้ตรงๆ
   ช่วง test (04–09/2026) ถูกเปิดดูแล้วกับ S3d, LX, PDX, VB, AB — กฎใหม่ต้องตรวจกับข้อมูลสดจาก Demo (ตั้งแต่ 05/10/2026) เท่านั้น
+- **ตัวเต็งที่ดีที่สุดตอนนี้ = NYV = `NY_VALUE` (`Strategies\NyValue.cs`, JOURNAL ลูปที่ 11):** 13:00 UTC ราคานอก value area ของวันก่อน → ตามทางนั้น, ถือ 60 นาที, SL 12, วันละ ≤ 1 ไม้
+  รัน: `tools\backtest.ps1 -Strategy NY_VALUE -Symbol XAUUSD -Period m1 -Balance 100 -Commission 8 -P1 60 -P2 12 -P3 0 -P4 0` (ต้องเป็นข้อมูล tick เพราะ profile คำนวณจาก tick)
+  cTrader tick 01/2024–09/2026: บวก 7 จาก 9 ช่วง รวม +390 (dev +350, test +40) ปี 2024 ก็บวก — แต่ test เล็กและ DD ต่อช่วง 21–60% ของทุน 100 → ยังเป็นสมมติฐานที่ต้องรันเดินหน้าบน Demo
+  ยังไม่ได้อยู่ใน `live.json`; จะรันคู่กับ S3d ต้องทำทฤษฎีรวมก่อน (robot รันทีละทฤษฎี ป้ายออเดอร์เดียวกัน)
+  ทฤษฎีที่ใช้ค่าระดับ tick ให้ override `StrategyBase.OnTick()` แล้วป้อน `FlowTracker` ของตัวเอง (ดู `NyValue.cs`)
 - กฎ R1 = `CH_SESSION_MOM` (โมเมนตัมข้าม session, เข้า 07:00 และ 10:00 UTC, ปิด 20:45 UTC) กำไรครบ 3 ช่วงเดิม (run #49–#51)
   แต่ drawdown สูง (27–64% ของบัญชี 1,000) ใช้กับทุน 100 ไม่ได้ — หน้า `summary.html` แสดงกฎนี้
 
