@@ -114,7 +114,7 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
 - **ตัวเต็งที่ดีที่สุดตอนนี้ = NYV = `NY_VALUE` (`Strategies\NyValue.cs`, JOURNAL ลูปที่ 11):** 13:00 UTC ราคานอก value area ของวันก่อน → ตามทางนั้น, ถือ 60 นาที, SL 12, วันละ ≤ 1 ไม้
   รัน: `tools\backtest.ps1 -Strategy NY_VALUE -Symbol XAUUSD -Period m1 -Balance 100 -Commission 8 -P1 60 -P2 12 -P3 0 -P4 0` (ต้องเป็นข้อมูล tick เพราะ profile คำนวณจาก tick)
   cTrader tick 01/2024–09/2026: บวก 7 จาก 9 ช่วง รวม +390 (dev +350, test +40) ปี 2024 ก็บวก — แต่ test เล็กและ DD ต่อช่วง 21–60% ของทุน 100 → ยังเป็นสมมติฐานที่ต้องรันเดินหน้าบน Demo
-  ยังไม่ได้อยู่ใน `live.json`; จะรันคู่กับ S3d ต้องทำทฤษฎีรวมก่อน (robot รันทีละทฤษฎี ป้ายออเดอร์เดียวกัน)
+  รันเดินหน้าบน Demo คู่กับ S3d ตั้งแต่ 05/10/2026 00:32 UTC ผ่านทฤษฎีรวม `DEMO_S3D_NYV` — ผลบน Demo คือการทดสอบที่สะอาดของทั้งสองกฎ
   ทฤษฎีที่ใช้ค่าระดับ tick ให้ override `StrategyBase.OnTick()` แล้วป้อน `FlowTracker` ของตัวเอง (ดู `NyValue.cs`)
 - กฎ R1 = `CH_SESSION_MOM` (โมเมนตัมข้าม session, เข้า 07:00 และ 10:00 UTC, ปิด 20:45 UTC) กำไรครบ 3 ช่วงเดิม (run #49–#51)
   แต่ drawdown สูง (27–64% ของบัญชี 1,000) ใช้กับทุน 100 ไม่ได้ — หน้า `summary.html` แสดงกฎนี้
@@ -126,7 +126,10 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
 
 - **การตัดสินใจของผู้ใช้ (05/10/2026): SL 12 USD, คงทุน 100 USD, เทรดทองต่อ, cBot เก็บข้อมูลสดมาวิเคราะห์** — `StopUsd` ของเครื่องมือวิจัยจึงมีค่าเริ่มต้น 12 (`stop:<x>`)
 - **ค่าที่ใช้ตอนรันสดมาจาก `Documents\BacktestLab\live.json`** (นอก repo) ซึ่งมาก่อนค่าบนหน้าจอ cTrader — ผู้ใช้แค่กด Start บนกราฟ XAUUSD **M1**
-  `{ "strategy": "SCALP_S3D", "p1": 0.56, "p2": 5, "p3": 12, "p4": 1, "lots": 0.01, "placeOrders": true }` (ใส่ `flatTime` ได้; ไฟล์เสีย = บันทึกอย่างเดียว)
+  **ตอนนี้ (ผู้ใช้สั่ง 05/10/2026):** `{ "strategy": "DEMO_S3D_NYV", "p1": 0.56, "p2": 5, "p3": 12, "p4": 60, "lots": 0.01, "placeOrders": true }` (ใส่ `flatTime` ได้; ไฟล์เสีย = บันทึกอย่างเดียว)
+  `DEMO_S3D_NYV` (`Strategies\DemoCombo.cs`) = S3d + NYV ในตัวเดียว: P1 ความมั่นใจ, P2 ถือ S3d (นาที), P3 SL (USD), P4 ถือ NYV (นาที); ออเดอร์ติดป้าย `S3D` / `NYV` ใน Comment
+  (ช่อง reason ของแถว OPEN ใน `trades.csv`) กฎละไม่เกิน 1 ไม้; ถ้าสองกฎให้สัญญาณแท่งเดียวกัน NYV ได้ก่อน — ตรวจแล้วว่าผลเท่ากับรันสองกฎแยกกันทุกไม้ (run #93 เทียบ #83, #92)
+  จะเพิ่มกฎที่สามให้ทำแบบเดียวกัน: คลาสรวมเรียกคลาสของแต่ละกฎ ไม่ก๊อปตรรกะ
   จะเปลี่ยนกฎที่รันบน Demo: แก้ไฟล์นี้ **ตามที่ผู้ใช้สั่งเท่านั้น** บอกผู้ใช้ว่าเปลี่ยนเป็นอะไร แล้วให้ผู้ใช้ Stop/Start เอง (rebuild .algo จะทำให้ cTrader รีสตาร์ต instance เอง)
   ไม่มีไฟล์ = ใช้ค่าบนหน้าจอ (ค่าเริ่มต้นคือ `EMA_CROSS` ซึ่งจะเทรดทันที) · cBot ต้องได้สิทธิ์ Full access และ cTrader ต้องเปิดค้างไว้
 - robot ไม่ส่งคำสั่งบนบัญชีเงินจริงเด็ดขาด (`Account.IsLive` → บันทึกอย่างเดียว) และตอนเริ่มจะโหลดประวัติ ≥ 6,000 แท่งให้ทฤษฎี

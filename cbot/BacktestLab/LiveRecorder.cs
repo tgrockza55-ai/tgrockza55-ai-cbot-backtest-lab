@@ -155,7 +155,8 @@ namespace cAlgo.Robots
             Append("trades.csv", TradeHeader, string.Join(",", Stamp(_bot.Server.TimeInUtc), "OPEN", p.Id, p.TradeType, Num(p.VolumeInUnits, "0.##"),
                 p.EntryPrice.ToString(_price, Inv), expected.ToString(_price, Inv), Num(slip, "0.###"), Num(latencyMs, "0"),
                 Num(_bot.Symbol.Ask - _bot.Symbol.Bid, "0.###"), p.StopLoss.HasValue ? p.StopLoss.Value.ToString(_price, Inv) : "",
-                pUp.HasValue ? Num(pUp.Value, "0.####") : "", "", "", "", "", "", Num(_bot.Account.Balance, "0.00")));
+                pUp.HasValue ? Num(pUp.Value, "0.####") : "", (p.Comment ?? "").Replace(',', ' '),        // แถว OPEN: ช่อง reason = ป้ายของกฎที่เปิดไม้นี้
+                "", "", "", "", Num(_bot.Account.Balance, "0.00")));
         });
 
         public void OrderFailed(TradeType side, string error) => Guard(() =>
