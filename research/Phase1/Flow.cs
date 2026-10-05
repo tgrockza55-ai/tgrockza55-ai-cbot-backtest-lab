@@ -78,6 +78,32 @@ static partial class Phase1
             asiaHigh.Add(asiaOver ? aHigh : double.NaN); asiaLow.Add(asiaOver ? aLow : double.NaN);
         }
 
+        // ---- footprint bars (5 minutes): one record per bar, keyed by the minute in which the bar ended
+        long fpBar = -1, fpLastMinute = 0; double fpOpen = 0, fpHigh = 0, fpLow = 0, fpClose = 0;
+        var fpUp = new Dictionary<int, int>(); var fpDown = new Dictionary<int, int>();
+        var footprints = new List<(long lastMinute, int delta, int total, double pocPos, int topDelta, int bottomDelta, int stack, double open, double close)>();
+        void CloseFootprint()
+        {
+            if (fpBar < 0 || fpUp.Count + fpDown.Count == 0 || fpLastMinute != fpBar * 300 + 240) return;       // the bar must run to its last minute
+            var rows = fpUp.Keys.Union(fpDown.Keys).OrderBy(r => r).ToArray();
+            int Up(int r) => fpUp.TryGetValue(r, out int v) ? v : 0; int Down(int r) => fpDown.TryGetValue(r, out int v) ? v : 0;
+            int delta = 0, total = 0, poc = rows[0], pocSize = -1;
+            foreach (int r in rows) { int u = Up(r), d = Down(r); delta += u - d; total += u + d; if (u + d > pocSize) { pocSize = u + d; poc = r; } }
+            if (total < 30 || rows.Length < 3) return;
+            // stack: three or more neighbouring rows that each lean 3:1 the same way (with at least 10 ticks in the row)
+            int stack = 0, run = 0, runSide = 0;
+            foreach (int r in rows)
+            {
+                int u = Up(r), d = Down(r), side = u + d >= 10 && u >= 3 * Math.Max(1, d) ? 1 : u + d >= 10 && d >= 3 * Math.Max(1, u) ? -1 : 0;
+                run = side != 0 && side == runSide ? run + 1 : side != 0 ? 1 : 0; runSide = side;
+                if (run >= 3) stack = side;
+            }
+            int top = rows.Length - 1;
+            double span = Math.Max(1e-9, fpHigh - fpLow);
+            footprints.Add((fpLastMinute, delta, total, ((poc + 0.5) * FlowBucket - fpLow) / span,
+                Up(rows[top]) - Down(rows[top]) + Up(rows[top - 1]) - Down(rows[top - 1]), Up(rows[0]) - Down(rows[0]) + Up(rows[1]) - Down(rows[1]), stack, fpOpen, fpClose));
+        }
+
         foreach (var (file, day) in files)
         {
             long dayStart = new DateTimeOffset(DateTime.ParseExact(day, "yyyy-MM-dd", Inv), TimeSpan.Zero).ToUnixTimeSeconds();
@@ -111,7 +137,12 @@ static partial class Phase1
                 }
                 if (bid < mBidL) mBidL = bid; if (ask > mAskH) mAskH = ask; if (mid > mH) mH = mid; if (mid < mL) mL = mid; mC = mid;
                 mTicks++; mSpread += ask - bid;
-                if (!double.IsNaN(lastMid)) { int d = mid > lastMid ? 1 : mid < lastMid ? -1 : 0; mDelta += d; cum += d; }
+                int step = double.IsNaN(lastMid) ? 0 : mid > lastMid ? 1 : mid < lastMid ? -1 : 0;
+                mDelta += step; cum += step;
+                // footprint of the 5-minute bar: upticks and downticks per 0.5 USD price row (what an "order flow ticks" chart draws)
+                if (unix / 300 != fpBar) { CloseFootprint(); fpBar = unix / 300; fpUp.Clear(); fpDown.Clear(); fpOpen = fpHigh = fpLow = mid; }
+                if (mid > fpHigh) fpHigh = mid; if (mid < fpLow) fpLow = mid; fpClose = mid; fpLastMinute = minute;
+                if (step != 0) { var side = step > 0 ? fpUp : fpDown; int row = (int)Math.Floor(mid / FlowBucket); side[row] = side.TryGetValue(row, out int have) ? have + 1 : 1; }
                 lastMid = mid;
                 if (mid > dayHigh) dayHigh = mid; if (mid < dayLow) dayLow = mid;
                 dSum += mid; dSum2 += mid * mid; dCnt++; sSum += mid; sCnt++;
@@ -119,7 +150,7 @@ static partial class Phase1
                 if ((unix + 7200) % 86400 < 9 * 3600) { if (double.IsNaN(aHigh) || mid > aHigh) aHigh = mid; if (double.IsNaN(aLow) || mid < aLow) aLow = mid; }
             }
         }
-        CloseMinute();
+        CloseMinute(); CloseFootprint();
 
         int n = T.Count;
         if (n < 500) { Console.WriteLine($"only {n} minutes of ticks: not enough yet"); return 1; }
@@ -454,6 +485,49 @@ static partial class Phase1
             Console.WriteLine();
             Replay("NYV New York open outside yesterday's value -> with it, hold 60", valueNy, 60, StopUsd);
             Replay("NYV the same, hold 120", valueNy, 120, StopUsd);
+        }
+
+        // ------------------------------------------------------------------ 7) footprint ("order flow ticks") of 5-minute bars: can it predict?
+        // "right" and "move" are measured mid price to mid price, before any cost: they show whether the reading says anything at all.
+        // "net" is the same event traded with real bid / ask and commission.
+        Console.WriteLine("\n-- 7) FOOTPRINT of 5-minute bars (tick delta per 0.5 USD row): the predicted direction against the next 5 / 15 minutes --");
+        {
+            var names = new[]
+            {
+                "bar delta clearly one way (>= 10% of ticks) -> same way", "bar up but delta negative / down but positive -> with the delta",
+                "busiest row in the top third -> up, bottom third -> down", "sellers at the high / buyers at the low (outer 2 rows) -> reversal",
+                "3+ stacked rows leaning 3:1 -> same way", "delta, close and busiest row all agree -> same way",
+            };
+            var lists = names.Select(_ => new List<(int, int)>()).ToArray(); int bars = 0;
+            foreach (var f in footprints)
+            {
+                if (!index.TryGetValue(f.lastMinute, out int m) || !Ok(m) || m < 5 || T[m] - T[m - 4] != 240) continue;
+                bars++;
+                int barSide = Math.Sign(f.close - f.open), deltaSide = Math.Abs(f.delta) >= 0.1 * f.total ? Math.Sign(f.delta) : 0;
+                int pocSide = f.pocPos >= 2 / 3.0 ? 1 : f.pocPos <= 1 / 3.0 ? -1 : 0;
+                if (deltaSide != 0) lists[0].Add((m, deltaSide));
+                if (barSide != 0 && f.delta != 0 && Math.Sign(f.delta) == -barSide) lists[1].Add((m, Math.Sign(f.delta)));
+                if (pocSide != 0) lists[2].Add((m, pocSide));
+                if (barSide > 0 && f.topDelta < 0 && f.topDelta <= -0.03 * f.total) lists[3].Add((m, -1));
+                else if (barSide < 0 && f.bottomDelta > 0 && f.bottomDelta >= 0.03 * f.total) lists[3].Add((m, 1));
+                if (f.stack != 0) lists[4].Add((m, f.stack));
+                if (deltaSide != 0 && deltaSide == barSide && deltaSide == pocSide) lists[5].Add((m, deltaSide));
+            }
+            Console.WriteLine($"5-minute bars with a footprint: {bars:N0}");
+            Console.WriteLine("reading                                                          n     next 5m: right  move      next 15m: right  move     traded 5m net   15m net");
+            for (int k = 0; k < names.Length; k++)
+            {
+                var st5 = new St(); var st15 = new St(); var net5 = new St(); var net15 = new St(); int r5 = 0, n5 = 0, r15 = 0, n15 = 0;
+                foreach (var (m, side) in lists[k])
+                {
+                    if (index.TryGetValue(T[m] + 300, out int a) && a - m == 5) { double x = side * (C[a] - C[m]); st5.Add(x); if (x != 0) { n5++; if (x > 0) r5++; } }
+                    if (index.TryGetValue(T[m] + 900, out int b) && b - m == 15) { double x = side * (C[b] - C[m]); st15.Add(x); if (x != 0) { n15++; if (x > 0) r15++; } }
+                    double p = Trade(m, side, 5, StopUsd); if (!double.IsNaN(p)) net5.Add(p);
+                    p = Trade(m, side, 15, StopUsd); if (!double.IsNaN(p)) net15.Add(p);
+                }
+                if (st5.N < 30) { Console.WriteLine($"{names[k],-62} {st5.N,6}  (too few)"); continue; }
+                Console.WriteLine($"{names[k],-62} {st5.N,6}   {100.0 * r5 / Math.Max(1, n5),12:N1}%  {st5.Mean.ToString("+0.000;-0.000", Inv),7}   {100.0 * r15 / Math.Max(1, n15),13:N1}%  {st15.Mean.ToString("+0.000;-0.000", Inv),7}   {net5.Mean.ToString("+0.000;-0.000", Inv),12}  {net15.Mean.ToString("+0.000;-0.000", Inv),8}");
+            }
         }
 
         void Replay(string label, List<(int m, int side)> events, int hold, double stop)
