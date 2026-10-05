@@ -143,8 +143,8 @@ static partial class Phase1
     // "start" rows count only the first snapshot of each stretch in that state, so they are closer to independent events.
     static void BookStudy(string dir)
     {
-        var tickT = new List<double>(); var tickMid = new List<double>();
-        var rows = new List<(double t, double mid, int vol, int shape)>();
+        var tickT = new List<double>(); var tickMid = new List<double>(); var tickSpread = new List<double>();
+        var rows = new List<(double t, double mid, int vol, int shape)>(); var ladder = new List<(double t, double mid, double width, double top)>();
         foreach (var file in Directory.GetFiles(dir, "tick-*.csv*").OrderBy(f => Path.GetFileName(f).Substring(5, 10)))
         {
             double day = new DateTimeOffset(DateTime.ParseExact(Path.GetFileName(file).Substring(5, 10), "yyyy-MM-dd", Inv), TimeSpan.Zero).ToUnixTimeSeconds();
@@ -152,7 +152,7 @@ static partial class Phase1
             {
                 var p = line.Split(','); if (p.Length < 3 || p[0].Length < 12) continue;
                 if (!double.TryParse(p[1], System.Globalization.NumberStyles.Float, Inv, out double bid) || !double.TryParse(p[2], System.Globalization.NumberStyles.Float, Inv, out double ask)) continue;
-                tickT.Add(day + TimeSpan.ParseExact(p[0], @"hh\:mm\:ss\.fff", Inv).TotalSeconds); tickMid.Add((bid + ask) / 2);
+                tickT.Add(day + TimeSpan.ParseExact(p[0], @"hh\:mm\:ss\.fff", Inv).TotalSeconds); tickMid.Add((bid + ask) / 2); tickSpread.Add(ask - bid);
             }
         }
         int ticks = tickT.Count; if (ticks < 1000) return;
@@ -180,6 +180,7 @@ static partial class Phase1
                 double bv = bids.Sum(x => x.size), av = asks.Sum(x => x.size), imb = (bv - av) / (bv + av);
                 double shape = (asks[asks.Length - 1].price - asks[0].price) - (bids[0].price - bids[bids.Length - 1].price);   // > 0: the ask ladder is stretched further
                 rows.Add((t, mid, imb > 0.05 ? 1 : imb < -0.05 ? -1 : 0, shape > 0.03 ? 1 : shape < -0.03 ? -1 : 0));
+                ladder.Add((t, mid, (asks[asks.Length - 1].price - asks[0].price) + (bids[0].price - bids[bids.Length - 1].price), asks[0].price - bids[0].price));
             }
         }
         Console.WriteLine($"\n-- 7) order book snapshots: {total:N0}, with a price {rows.Count:N0} -> the mid price later (USD; + = up) --");
@@ -208,6 +209,52 @@ static partial class Phase1
         Line("bid ladder stretched (thin below)", r => r.shape, -1, false);
         Line("  start of ask ladder stretched", r => r.shape, 1, true);
         Line("  start of bid ladder stretched", r => r.shape, -1, true);
+
+        // 8) the width of the ladder (distance from the best quote to the deepest one, both sides added) as a reading of liquidity:
+        //    does a stretched ladder come before a wider spread and a bigger move — and does it say more than the move just seen?
+        int Count(double t) { int lo = 0, hi = ticks; while (lo < hi) { int m = (lo + hi) / 2; if (tickT[m] <= t) lo = m + 1; else hi = m; } return lo; }
+        double Range(int a, int b) { if (b - a < 2) return double.NaN; double hi = double.MinValue, lo = double.MaxValue; for (int i = a; i < b; i++) { if (tickMid[i] > hi) hi = tickMid[i]; if (tickMid[i] < lo) lo = tickMid[i]; } return hi - lo; }
+        var obs = new List<(double width, double top, double past, double next, double next5, double spreadNext)>();
+        foreach (var r in ladder)
+        {
+            int now = Count(r.t), back = Count(r.t - 60), ahead = Count(r.t + 60), ahead5 = Count(r.t + 300);
+            double past = Range(back, now), next = Range(now, ahead), next5 = Range(now, ahead5);
+            if (double.IsNaN(past) || double.IsNaN(next) || double.IsNaN(next5) || double.IsNaN(MidAt(r.t + 300))) continue;
+            double s = 0; for (int i = now; i < ahead; i++) s += tickSpread[i];
+            obs.Add((r.width, r.top, past, next, next5, s / (ahead - now)));
+        }
+        Console.WriteLine($"\n-- 8) width of the ladder (liquidity) -> spread and movement that follow; {obs.Count:N0} snapshots (USD) --");
+        if (obs.Count < 2000) { Console.WriteLine("not enough snapshots yet"); return; }
+        var widths = obs.Select(o => o.width).OrderBy(v => v).ToArray();
+        double Q(double q) => widths[Math.Min(widths.Length - 1, (int)(q * widths.Length))];
+        Console.WriteLine("ladder width              n    spread now   spread next 60s   range last 60s   range next 60s   range next 5m");
+        double[] cut = { double.MinValue, Q(0.2), Q(0.4), Q(0.6), Q(0.8), double.MaxValue };
+        for (int b = 0; b < 5; b++)
+        {
+            var g = obs.Where(o => o.width > cut[b] && o.width <= cut[b + 1]).ToList(); if (g.Count == 0) continue;
+            string label = b == 0 ? $"<= {cut[1]:N2}" : b == 4 ? $"> {cut[4]:N2}" : $"{cut[b]:N2} - {cut[b + 1]:N2}";
+            Console.WriteLine($"{label,-20} {g.Count,6}   {g.Average(o => o.top),10:N3}   {g.Average(o => o.spreadNext),15:N3}   {g.Average(o => o.past),14:N2}   {g.Average(o => o.next),14:N2}   {g.Average(o => o.next5),13:N2}");
+        }
+        // the same question with the recent movement held fixed: within each third of "range of the last 60 seconds", narrow ladder against wide ladder
+        var pastSorted = obs.Select(o => o.past).OrderBy(v => v).ToArray(); double p1 = pastSorted[pastSorted.Length / 3], p2 = pastSorted[2 * pastSorted.Length / 3], wMid = Q(0.5);
+        Console.WriteLine("\nwith the recent movement held fixed (range next 60s / spread next 60s):");
+        Console.WriteLine("range of the last 60s      narrow ladder (below median)        wide ladder (above median)");
+        foreach (var (name, lo, hi) in new[] { ("quiet third", double.MinValue, p1), ("middle third", p1, p2), ("busy third", p2, double.MaxValue) })
+        {
+            var a = obs.Where(o => o.past > lo && o.past <= hi && o.width <= wMid).ToList(); var w = obs.Where(o => o.past > lo && o.past <= hi && o.width > wMid).ToList();
+            if (a.Count < 30 || w.Count < 30) { Console.WriteLine($"{name,-22} too few"); continue; }
+            Console.WriteLine($"{name,-22} n {a.Count,6}  {a.Average(o => o.next),5:N2} / {a.Average(o => o.spreadNext):N3}          n {w.Count,6}  {w.Average(o => o.next),5:N2} / {w.Average(o => o.spreadNext):N3}");
+        }
+        double Corr(Func<(double width, double top, double past, double next, double next5, double spreadNext), double> fx, Func<(double width, double top, double past, double next, double next5, double spreadNext), double> fy)
+        {
+            double mx = obs.Average(fx), my = obs.Average(fy), sxy = 0, sxx = 0, syy = 0;
+            foreach (var o in obs) { double dx = fx(o) - mx, dy = fy(o) - my; sxy += dx * dy; sxx += dx * dx; syy += dy * dy; }
+            return sxy / Math.Sqrt(Math.Max(1e-12, sxx * syy));
+        }
+        double rWN = Corr(o => o.width, o => o.next), rPN = Corr(o => o.past, o => o.next), rWP = Corr(o => o.width, o => o.past);
+        double partial = (rWN - rWP * rPN) / Math.Sqrt(Math.Max(1e-12, (1 - rWP * rWP) * (1 - rPN * rPN)));
+        Console.WriteLine($"\ncorrelation with the range of the next 60s: ladder width {rWN:N2}, range of the last 60s {rPN:N2}; ladder width once the last 60s are accounted for: {partial:N2}");
+        Console.WriteLine($"correlation of ladder width with: spread now {Corr(o => o.width, o => o.top):N2}, spread next 60s {Corr(o => o.width, o => o.spreadNext):N2}, range of the last 60s {rWP:N2}");
     }
 
     static IEnumerable<string> ReadMaybeGz(string file)
