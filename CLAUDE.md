@@ -119,6 +119,8 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
   รัน: `tools\backtest.ps1 -Strategy NY_VALUE -Symbol XAUUSD -Period m1 -Balance 100 -Commission 8 -P1 60 -P2 12 -P3 0 -P4 0` (ต้องเป็นข้อมูล tick เพราะ profile คำนวณจาก tick)
   cTrader tick 01/2024–09/2026: บวก 7 จาก 9 ช่วง รวม +390 (dev +350, test +40) ปี 2024 ก็บวก — แต่ test เล็กและ DD ต่อช่วง 21–60% ของทุน 100 → ยังเป็นสมมติฐานที่ต้องรันเดินหน้าบน Demo
   รันเดินหน้าบน Demo คู่กับ S3d ตั้งแต่ 05/10/2026 00:32 UTC ผ่านทฤษฎีรวม `DEMO_S3D_NYV` — ผลบน Demo คือการทดสอบที่สะอาดของทั้งสองกฎ
+  SL ของ NYV (JOURNAL 06/10/2026, ตารางท้ายหมวด 6 ของ `Phase1.exe flow live-test`): ATR / trailing / กันทุน ไม่ดีกว่า SL 12 คงที่ (DD และไม้แย่สุดแย่ลง);
+  SL 20 คงที่ดูดีกว่า (+625, DD 82) แต่เสี่ยง 20% ของทุนต่อไม้และเลือกหลังเห็น test → ยังเป็นสมมติฐาน ไม่ได้เปลี่ยนกฎบน Demo
   ทฤษฎีที่ใช้ค่าระดับ tick ให้ override `StrategyBase.OnTick()` แล้วป้อน `FlowTracker` ของตัวเอง (ดู `NyValue.cs`)
 - **ทักษะการทำนายบนกราฟ Heikin Ashi (ผู้ใช้สั่ง 06/10/2026: วัดแค่ทายถูก/ผิด เป้า ≥ 80%):** `HA_PREDICT` (`Strategies\HeikinPredict.cs`) รันบนกราฟ **Hm1** ไม่เปิดออเดอร์
   ตอนแท่ง HA เปิด: ราคาจริง (bid) สูงกว่าราคาเปิดของแท่ง HA → ทายขึ้น, ต่ำกว่า → ลง · ผลอยู่ในโน้ตของ run (`StrategyBase.ReportNote`) และบรรทัด `HA_PREDICT result/month` ใน log

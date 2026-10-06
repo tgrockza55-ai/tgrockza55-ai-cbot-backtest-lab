@@ -485,6 +485,55 @@ static partial class Phase1
             Console.WriteLine();
             Replay("NYV New York open outside yesterday's value -> with it, hold 60", valueNy, 60, StopUsd);
             Replay("NYV the same, hold 120", valueNy, 120, StopUsd);
+
+            // NYV with stops that are not fixed (user question 06/10/2026). ATR = mean high-low of the last 14 fifteen-minute windows at the entry.
+            // Minute resolution: inside a minute the stop is checked before the target, a stop is filled at its level, and the best price a
+            // trailing stop follows is the one reached up to the minute before. Commission 0.08 (the real one for 0.01 lot).
+            {
+                double Atr15(int m) { double s = 0; int c = 0; for (int k = 0; k < 14 && m - 15 * k - 14 >= 0; k++, c++) s += MaxH(m - 15 * k - 14, m - 15 * k) - MinL(m - 15 * k - 14, m - 15 * k); return c > 0 ? s / c : 0; }
+                double Plan(int m, int side, int hold, double sl, double tp, bool trail, double be)
+                {
+                    int e = m + 1; if (e >= n || T[e] != T[m] + 60) return double.NaN;
+                    if (!index.TryGetValue(T[e] + hold * 60L, out int x) || x - e != hold) return double.NaN;
+                    double entry = side > 0 ? askO[e] : bidO[e], best = 0;
+                    for (int j = e; j < x; j++)
+                    {
+                        double worst = side > 0 ? bidL[j] - entry : entry - askH[j], level = (trail ? best : 0) - sl;
+                        if (be > 0 && best >= be) level = Math.Max(level, 0);
+                        if (worst <= level) return level - 0.08;
+                        double fav = side > 0 ? H[j] - spread[j] / 2 - entry : entry - (L[j] + spread[j] / 2);
+                        if (tp > 0 && fav >= tp) return tp - 0.08;
+                        if (fav > best) best = fav;
+                    }
+                    return side * ((side > 0 ? bidO[x] : askO[x]) - entry) - 0.08;
+                }
+                var plans = new List<(string name, Func<double, double, double> sl, double tpAtr, bool trail, double beAtr)>
+                {
+                    ("stop 12 USD flat (the rule as it runs)", (a, p) => 12, 0, false, 0), ("stop 8 USD flat", (a, p) => 8, 0, false, 0), ("stop 20 USD flat", (a, p) => 20, 0, false, 0),
+                    ("stop 0.3% of the price", (a, p) => 0.003 * p, 0, false, 0), ("stop 0.5% of the price", (a, p) => 0.005 * p, 0, false, 0),
+                };
+                foreach (double k in new[] { 1.0, 1.5, 2, 3, 4 }) plans.Add(($"stop {k:0.0} ATR", (a, p) => k * a, 0, false, 0));
+                foreach (double k in new[] { 1.5, 2, 3 }) plans.Add(($"trailing stop {k:0.0} ATR", (a, p) => k * a, 0, true, 0));
+                foreach (double k in new[] { 2.0, 3 }) plans.Add(($"stop {k:0.0} ATR, to entry after +1.0 ATR", (a, p) => k * a, 0, false, 1));
+                foreach (double tp in new[] { 2.0, 3, 4 }) plans.Add(($"stop 2.0 ATR, target {tp:0.0} ATR", (a, p) => 2 * a, tp, false, 0));
+                long testFrom = new DateTimeOffset(2026, 4, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds(), y25 = new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds(), y26 = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
+                var atrs = valueNy.Select(ev => Atr15(ev.Item1)).Where(v => v > 0).ToList();
+                Console.WriteLine($"\nNYV, hold 60: the stop made to follow the volatility. ATR(14) of 15-minute bars at the entry: mean {atrs.Average():N2}, median {atrs.OrderBy(v => v).ElementAt(atrs.Count / 2):N2} USD. dev = ..2026-03, test = 2026-04..");
+                Console.WriteLine("exit plan                                   n   win%    avg    PF     net   max DD  worst trade  stopped |   2024   2025  26-Q1 |   dev   test  | mean stop USD");
+                foreach (var pl in plans)
+                {
+                    var st = new St(); double gw = 0, gl = 0, run = 0, peak = 0, dd = 0, worst = 0, dev = 0, test = 0, slSum = 0; var yr = new double[3]; int stopped = 0;
+                    foreach (var (m, side) in valueNy)
+                    {
+                        double atr = Atr15(m); if (atr <= 0) continue;
+                        double sl = pl.sl(atr, C[m]), p = Plan(m, side, 60, sl, pl.tpAtr * atr, pl.trail, pl.beAtr * atr); if (double.IsNaN(p)) continue;
+                        st.Add(p); slSum += sl; if (p > 0) gw += p; else gl -= p; run += p; peak = Math.Max(peak, run); dd = Math.Max(dd, peak - run); worst = Math.Min(worst, p);
+                        if (!pl.trail && pl.beAtr == 0 && p <= -sl) stopped++;
+                        if (T[m] >= testFrom) test += p; else { dev += p; yr[T[m] < y25 ? 0 : T[m] < y26 ? 1 : 2] += p; }
+                    }
+                    Console.WriteLine($"{pl.name,-40} {st.N,4}  {st.Win,5:N1}  {st.Mean.ToString("+0.00;-0.00", Inv),6}  {(gl > 0 ? gw / gl : 0),4:N2}  {st.Sum,6:N0}  {dd,7:N0}  {worst,11:N1}  {(pl.trail || pl.beAtr > 0 ? "-" : stopped.ToString()),7} | {yr[0],6:N0} {yr[1],6:N0} {yr[2],6:N0} | {dev,5:N0}  {test,5:N0}  | {slSum / Math.Max(1, st.N),8:N1}");
+                }
+            }
         }
 
         // ------------------------------------------------------------------ 7) footprint ("order flow ticks") of 5-minute bars: can it predict?
