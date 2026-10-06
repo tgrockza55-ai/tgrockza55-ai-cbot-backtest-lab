@@ -115,7 +115,8 @@ static partial class Phase1
         if (args.Length > 0 && args[0] == "hatrade") return HeikinTrade(args);            // trading the Heikin-Ashi call on ticks (HeikinTrade.cs)
         if (args.Length > 0 && args[0] == "hatp") return HeikinTp(args);                  // the same call with a short fixed take-profit and a wide stop (HeikinTp.cs)
         if (args.Length > 0 && args[0] == "hasl") return HeikinSl(args);                  // the same call with ATR stops, trailing stops, break-even (HeikinSl.cs)
-        if (args.Length > 0 && args[0] == "flow") return FlowStudy(args);              // tick-level study: profile, sweeps, anchored VWAP, delta (Flow.cs)
+        if (args.Length > 0 && args[0] == "burst") return BurstStudy(args);               // momentum burst / velocity scalping on ticks (Burst.cs)
+        if (args.Length > 0 && args[0] == "flow") return FlowStudy(args);             // tick-level study: profile, sweeps, anchored VWAP, delta (Flow.cs)
         if (args.Length > 0 && (args[0] == "live" || args[0] == "live-test"))                // study of the market recorded live on Demo (Live.cs)
             return LiveStudy(args.Length > 1 ? args[1] : "XAUUSD", args[0] == "live-test");
         var study = args.FirstOrDefault(a => a.StartsWith("study:"))?.Substring(6);          // tier-0 event studies (Studies.cs)
