@@ -47,7 +47,11 @@ static partial class Phase1
         string[] models = { "speed only", "speed + accelerating", "speed + tick frequency", "speed + tick imbalance", "all four" };
         int[] delays = { 0, 500, 1000 };
         int[] fixedExit = { 2000, 5000, 10000, 30000, 60000, 300000 };
-        string[] exitName = { "2s", "5s", "10s", "30s", "60s", "300s", "decay", "TP1/SL.5", "decay+SL1" };
+        double[] tpUsd = { 0.3, 0.5, 1.0 }, slUsd = { 2, 5, 12 };                 // short fixed target with a wide stop, in USD; closed after 300 s if neither is reached
+        const int BaseExits = 9;
+        string[] exitName = new[] { "2s", "5s", "10s", "30s", "60s", "300s", "decay", "TP1/SL.5", "decay+SL1" }
+            .Concat(tpUsd.SelectMany(tp => slUsd.Select(sl => $"TP{tp:0.0}/SL{sl:0}"))).ToArray();
+        var tpHits = new double[2, 9, 9, 2, 2];                                    // [side][burst][tp x sl][dev/test]: target reached, stopped
         int W = win.Length, B = bucketName.Length, Hn = hor.Length, CF = cfgWin.Length * cfgTh.Length, M = models.Length, D = delays.Length, E = exitName.Length;
 
         var p1 = new double[W, B, Hn, 4];                                          // n, gross sum, continued, net sum
@@ -168,6 +172,12 @@ static partial class Phase1
                             if (!done[6] && decayed) { done[6] = true; res[6] = now; open--; }
                             if (!done[7]) { if (now <= -0.5 * v) { done[7] = true; res[7] = now; open--; } else if (now >= v) { done[7] = true; res[7] = v; open--; } }
                             if (!done[8] && (decayed || now <= -v)) { done[8] = true; res[8] = now; open--; }
+                            for (int k = 0; k < 9; k++)
+                            {
+                                int x = BaseExits + k; if (done[x]) continue;
+                                if (now <= -slUsd[k % 3]) { done[x] = true; res[x] = now; open--; if (di == 1) tpHits[side, c, k, part, 1]++; }
+                                else if (now >= tpUsd[k / 3]) { done[x] = true; res[x] = tpUsd[k / 3]; open--; if (di == 1) tpHits[side, c, k, part, 0]++; }
+                            }
                         }
                         if (open > 0) continue;
                         for (int m = 0; m < M; m++)
@@ -220,12 +230,12 @@ static partial class Phase1
             double Avg(int c, int m, int di, int x, int part, int what) => p2[s, c, m, di, x, part, what] / Math.Max(1, p2[s, c, m, di, x, part, 0]);
             Console.WriteLine($"\n================ {sideName[s]} ================");
             Console.WriteLine("-- 2) burst onsets traded (speed only, entry 0.5 s after the signal): net USD per trade by exit. dev | test");
-            Console.WriteLine("burst      dev n  test n |" + string.Concat(exitName.Select(x => $" {x,9}")) + " | test:" + string.Concat(exitName.Select(x => $" {x,9}")));
+            Console.WriteLine("burst      dev n  test n |" + string.Concat(exitName.Take(BaseExits).Select(x => $" {x,9}")) + " | test:" + string.Concat(exitName.Take(BaseExits).Select(x => $" {x,9}")));
             for (int c = 0; c < CF; c++)
-                Console.WriteLine($"{Cfg(c)}  {p2[s, c, 0, 1, 0, 0, 0],8:N0} {p2[s, c, 0, 1, 0, 1, 0],7:N0} |" + string.Concat(Enumerable.Range(0, E).Select(x => $" {F(Avg(c, 0, 1, x, 0, 1)),9}")) + " |      " + string.Concat(Enumerable.Range(0, E).Select(x => $" {F(Avg(c, 0, 1, x, 1, 1)),9}")));
+                Console.WriteLine($"{Cfg(c)}  {p2[s, c, 0, 1, 0, 0, 0],8:N0} {p2[s, c, 0, 1, 0, 1, 0],7:N0} |" + string.Concat(Enumerable.Range(0, BaseExits).Select(x => $" {F(Avg(c, 0, 1, x, 0, 1)),9}")) + " |      " + string.Concat(Enumerable.Range(0, BaseExits).Select(x => $" {F(Avg(c, 0, 1, x, 1, 1)),9}")));
             Console.WriteLine("   the same with the entry half-spread and the latency taken out (the exit half-spread is still in; part 1 has the mid-to-mid numbers), dev; and the share of winning trades after cost:");
             for (int c = 0; c < CF; c++)
-                Console.WriteLine($"{Cfg(c)}                   |" + string.Concat(Enumerable.Range(0, E).Select(x => $" {F(Avg(c, 0, 1, x, 0, 3)),9}")) + $" | win% at 10s {100 * Avg(c, 0, 1, 2, 0, 2):N1}, 60s {100 * Avg(c, 0, 1, 4, 0, 2):N1}, decay {100 * Avg(c, 0, 1, 6, 0, 2):N1}");
+                Console.WriteLine($"{Cfg(c)}                   |" + string.Concat(Enumerable.Range(0, BaseExits).Select(x => $" {F(Avg(c, 0, 1, x, 0, 3)),9}")) + $" | win% at 10s {100 * Avg(c, 0, 1, 2, 0, 2):N1}, 60s {100 * Avg(c, 0, 1, 4, 0, 2):N1}, decay {100 * Avg(c, 0, 1, 6, 0, 2):N1}");
 
             Console.WriteLine("\n-- 3) what each ingredient adds (entry 0.5 s). dev: n, before cost / net at 10 s, net at 60 s, net on decay | test: n, net 10 s, 60 s, decay");
             for (int c = 0; c < CF; c++)
@@ -243,6 +253,14 @@ static partial class Phase1
             Console.WriteLine("\n-- 6) by period (speed only, entry 0.5 s): net per trade at 10 s / 60 s / on decay");
             for (int c = 0; c < CF; c++)
                 Console.WriteLine($"{Cfg(c)} | " + string.Join(" | ", Enumerable.Range(0, 4).Select(p => new[] { "2024", "2025", "2026-01..03", "2026-04..09" }[p] + $" ({yr[s, c, p, 0, 0]:N0}) " + string.Join(" ", new[] { 2, 4, 6 }.Select(x => F(yr[s, c, p, x, 1] / Math.Max(1, yr[s, c, p, x, 0])))))) + (s == 0 ? $" | within 60 s: best {F(exc[c, 1] / Math.Max(1, exc[c, 0]))} worst {F(exc[c, 2] / Math.Max(1, exc[c, 0]))}" : ""));
+
+            Console.WriteLine("\n-- 8) short fixed target, wide stop (speed only, entry 0.5 s, closed after 300 s): reached the target / stopped / net per trade. dev | test");
+            for (int c = 0; c < CF; c++)
+                for (int k = 0; k < 9; k++)
+                {
+                    int x = BaseExits + k; double dn = Math.Max(1, p2[s, c, 0, 1, x, 0, 0]), tn = Math.Max(1, p2[s, c, 0, 1, x, 1, 0]);
+                    Console.WriteLine($"{Cfg(c)}  target {tpUsd[k / 3]:0.0}  stop {slUsd[k % 3],2:0} | {dn,8:N0}  {100 * tpHits[s, c, k, 0, 0] / dn,5:N1}%  {100 * tpHits[s, c, k, 0, 1] / dn,5:N2}%  {F(Avg(c, 0, 1, x, 0, 1))} | {tn,7:N0}  {100 * tpHits[s, c, k, 1, 0] / tn,5:N1}%  {100 * tpHits[s, c, k, 1, 1] / tn,5:N2}%  {F(Avg(c, 0, 1, x, 1, 1))}");
+                }
 
             // every combination: how many are positive on dev, and what the best of dev does on test
             int combos = 0, devPos = 0, bothPos = 0; var ranked = new List<(double dev, int c, int m, int di, int x)>();
