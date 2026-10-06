@@ -40,6 +40,9 @@ static partial class Phase1
         if (files.Count == 0) { Console.WriteLine("no tick files in " + dir); return 1; }
 
         const double Commission = 0.08;
+        // ses:<asia|asia-core|london|ny> keeps only the signals of that session (UTC): asia 22-07, asia-core 00-07, london 07-13, ny 13-21
+        string ses = args.FirstOrDefault(x => x.StartsWith("ses:"))?.Substring(4) ?? "all";
+        bool InSession(long ms) { int h = (int)(ms / 3600000 % 24); return ses == "asia" ? h >= 22 || h < 7 : ses == "asia-core" ? h < 7 : ses == "london" ? h >= 7 && h < 13 : ses == "ny" ? h >= 13 && h < 21 : true; }
         double[] gaps = { 0, 0.2, 0.5, 1.0, 2.0 }, tps = { 0, 0.25, 0.5, 1.0, 2.0 }; int[] holds = { 1, 3 }; double[] sls = { 0.5, 1, 2, 4, 0 };     // stop in usual ranges; the last one (0) = StopUsd flat.           // target 0 = none: leave on time only
         string[] buckets = { "2024", "2025", "2026-01..03", "2026-04..09" };
         long[] bucketEnd = { Unix(2025, 1), Unix(2026, 1), Unix(2026, 4), long.MaxValue };
@@ -92,7 +95,7 @@ static partial class Phase1
                 if (!decided && t >= decideAt)
                 {
                     decided = true;
-                    if (haveHa && ranges.Count >= 60 && lastT >= decideAt - 10000 && t - decideAt < 30000)
+                    if (haveHa && InSession(decideAt) && ranges.Count >= 60 && lastT >= decideAt - 10000 && t - decideAt < 30000)
                     {
                         double usual = rangeSum / ranges.Count, hcEst = (bO + bH + bL + lastBid) / 4, gap = lastBid - (hoCur + hcEst) / 2;
                         if (gap != 0 && usual > 0)
@@ -145,7 +148,7 @@ static partial class Phase1
             }
         }
 
-        Console.WriteLine($"\n==== HAT: enter at second 59 in the direction called for the next Heikin-Ashi bar ({files[0].day} .. {files[^1].day}, {signals:N0} signals) ====");
+        Console.WriteLine($"\n==== HAT: enter at second 59 in the direction called for the next Heikin-Ashi bar ({files[0].day} .. {files[^1].day}, {signals:N0} signals, session: {ses}) ====");
         Console.WriteLine($"USD per trade for 0.01 lot, after the real spread (mean {spreadSum / Math.Max(1, signals):N3} at entry) and {Commission:N2} commission. stop {StopUsd:N0}. dev = 2024-01..2026-03, test = 2026-04..09");
         Console.WriteLine("gap and target in usual 1-minute ranges; target 0 = leave on time only\n");
         Console.WriteLine("hold  gap>=  target |  2024     2025   26-Q1  |  dev trades   win%    avg      total |  test trades   win%    avg     total |  price went the called way (mid, no cost): dev   avg move   opposite trade, net");
