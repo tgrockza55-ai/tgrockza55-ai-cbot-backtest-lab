@@ -112,7 +112,8 @@ static partial class Phase1
     static int Main(string[] args)
     {
         var docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-        if (args.Length > 0 && args[0] == "flow") return FlowStudy(args);                 // tick-level study: profile, sweeps, anchored VWAP, delta (Flow.cs)
+        if (args.Length > 0 && args[0] == "hatrade") return HeikinTrade(args);            // trading the Heikin-Ashi call on ticks (HeikinTrade.cs)
+        if (args.Length > 0 && args[0] == "flow") return FlowStudy(args);                // tick-level study: profile, sweeps, anchored VWAP, delta (Flow.cs)
         if (args.Length > 0 && (args[0] == "live" || args[0] == "live-test"))                // study of the market recorded live on Demo (Live.cs)
             return LiveStudy(args.Length > 1 ? args[1] : "XAUUSD", args[0] == "live-test");
         var study = args.FirstOrDefault(a => a.StartsWith("study:"))?.Substring(6);          // tier-0 event studies (Studies.cs)
