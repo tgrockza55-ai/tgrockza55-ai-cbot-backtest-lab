@@ -86,6 +86,9 @@ namespace cAlgo.Robots
         /// <summary>ทฤษฎีที่ใช้โมเดล: P(ราคาขึ้น) ของแท่งล่าสุดที่ปิดแล้ว หลังเรียก Signal() — ตัวบันทึกตลาดสดเก็บไว้เทียบกับผลจริง</summary>
         public virtual double? Prediction => null;
 
+        /// <summary>ข้อความสรุปผลที่ทฤษฎีอยากแนบไปกับโน้ตของรอบทดสอบ (เช่นทฤษฎีที่นับความแม่นของการทายแทนการเทรด) — null = ไม่มี</summary>
+        public virtual string ReportNote => null;
+
         /// <summary>true = เครื่องมือ (เช่นส่งออกข้อมูล) ไม่ใช่ทฤษฎี — ไม่ส่งผลขึ้น lab</summary>
         public virtual bool IsUtility => false;
 

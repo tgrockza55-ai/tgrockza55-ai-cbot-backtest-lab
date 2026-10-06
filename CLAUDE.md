@@ -116,6 +116,11 @@ powershell -ExecutionPolicy Bypass -File tools\day-study.ps1 -Symbol XAUUSD
   cTrader tick 01/2024–09/2026: บวก 7 จาก 9 ช่วง รวม +390 (dev +350, test +40) ปี 2024 ก็บวก — แต่ test เล็กและ DD ต่อช่วง 21–60% ของทุน 100 → ยังเป็นสมมติฐานที่ต้องรันเดินหน้าบน Demo
   รันเดินหน้าบน Demo คู่กับ S3d ตั้งแต่ 05/10/2026 00:32 UTC ผ่านทฤษฎีรวม `DEMO_S3D_NYV` — ผลบน Demo คือการทดสอบที่สะอาดของทั้งสองกฎ
   ทฤษฎีที่ใช้ค่าระดับ tick ให้ override `StrategyBase.OnTick()` แล้วป้อน `FlowTracker` ของตัวเอง (ดู `NyValue.cs`)
+- **ทักษะการทำนายบนกราฟ Heikin Ashi (ผู้ใช้สั่ง 06/10/2026: วัดแค่ทายถูก/ผิด เป้า ≥ 80%):** `HA_PREDICT` (`Strategies\HeikinPredict.cs`) รันบนกราฟ **Hm1** ไม่เปิดออเดอร์
+  ตอนแท่ง HA เปิด: ราคาจริง (bid) สูงกว่าราคาเปิดของแท่ง HA → ทายขึ้น, ต่ำกว่า → ลง · ผลอยู่ในโน้ตของ run (`StrategyBase.ReportNote`) และบรรทัด `HA_PREDICT result/month` ใน log
+  รัน: `tools\backtest.ps1 -Strategy HA_PREDICT -Symbol XAUUSD -Period Hm1 -Balance 100000 -Commission 10 -P1 0 -P2 0 -P3 0 -P4 0` · ชั้น 0: `Phase1.exe study:ha period:all`
+  ผล 2024-01..2026-09 (run #95–#103, 963,580 แท่ง): **ถูก 82.5%** ทุกช่วง 81.8–83.1%; เมื่อราคาห่างชัดเจน (65% ของแท่ง) 92.3%
+  **แต่การทายชุดเดียวกันถูกแค่ 48.8% เมื่อวัดกับราคาจริง** — ความแม่นมาจากสูตรเฉลี่ยของแท่ง HA ไม่ใช่การรู้ทิศราคา ต้องบอกผู้ใช้ทุกครั้งที่อ้างตัวเลข 82%
 - กฎ R1 = `CH_SESSION_MOM` (โมเมนตัมข้าม session, เข้า 07:00 และ 10:00 UTC, ปิด 20:45 UTC) กำไรครบ 3 ช่วงเดิม (run #49–#51)
   แต่ drawdown สูง (27–64% ของบัญชี 1,000) ใช้กับทุน 100 ไม่ได้ — หน้า `summary.html` แสดงกฎนี้
 

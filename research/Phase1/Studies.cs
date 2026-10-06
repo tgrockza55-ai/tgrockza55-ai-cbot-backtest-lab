@@ -74,6 +74,7 @@ static partial class Phase1
         if (name == "h10") ScalpAnatomy();
         if (name == "h11") VolumeBehaviour();
         if (name == "lx") ScalpRuleLX();
+        if (name == "ha") HeikinStudy();
         if (name == "s3") ScalpRuleS3();
         if (name == "s3x") ScalpExits();
         if (name == "parity") Parity();

@@ -144,6 +144,48 @@ function tickTable({ ticks, total }) {
         h("td", {}), h("td", {}), h("td", { class: `num ${signClass(total)}` }, money(total)), h("td", {}), h("td", {})))));
 }
 
+// ---------- ทักษะการทำนายบนกราฟ Heikin Ashi (HA_PREDICT): cBot นับว่าทายถูกกี่แท่ง ไม่เปิดออเดอร์ ----------
+// ตัวเลขมาจากโน้ตของรอบทดสอบที่ cBot เขียนเอง: "...ถูก 82.35% จาก 30,032 แท่ง · เฉพาะตอนราคาห่างชัดเจน: 92.13% (63.57% ของแท่ง) · ...ราคาจริง...: ถูก 48.93%"
+async function heikinSection() {
+  const { data, error } = await sb.from("backtest_runs")
+    .select("id, date_from, date_to, note, created_at, timeframe, strategy:strategies!inner(code)")
+    .eq("strategy.code", "HA_PREDICT").order("created_at", { ascending: false }).limit(100);
+  if (error) throw error;
+  const seen = new Set();
+  const rows = data
+    .filter((r) => { const k = `${(r.date_from ?? "").slice(0, 10)}|${(r.date_to ?? "").slice(0, 10)}`; if (seen.has(k)) return false; seen.add(k); return true; })
+    .map((r) => {
+      const m = /ถูก ([\d.]+)% จาก ([\d,]+) แท่ง.*?ชัดเจน: ([\d.]+)% \(([\d.]+)% ของแท่ง\).*?ถูก ([\d.]+)%/.exec(r.note ?? "");
+      return m && { r, pct: +m[1], bars: +m[2].replace(/,/g, ""), farPct: +m[3], farShare: +m[4], realPct: +m[5] };
+    })
+    .filter(Boolean).sort((a, b) => (a.r.date_from ?? "").localeCompare(b.r.date_from ?? ""));
+  if (!rows.length) return "";
+  const bars = rows.reduce((s, x) => s + x.bars, 0);
+  const avg = (f) => rows.reduce((s, x) => s + f(x) * x.bars, 0) / bars;
+  const cell = (v) => h("td", { class: "num" }, `${v.toFixed(2)}%`);
+  return h("section", { class: "stack" },
+    h("div", {},
+      h("h1", {}, "ทักษะการทำนาย: แท่ง Heikin Ashi 1 นาที"),
+      h("p", { class: "muted" }, "ทอง XAUUSD · กราฟ Hm1 · ข้อมูล tick · ทายตอนแท่งเปิดว่าแท่งนั้นจะจบเป็นแท่งขึ้นหรือลง · ไม่เปิดออเดอร์ ไม่คิดสเปรด")),
+    h("section", { class: "card" },
+      h("h2", {}, `ทายถูก ${avg((x) => x.pct).toFixed(1)}% จาก ${bars.toLocaleString("en-US")} แท่ง — ผ่านเป้า 80%`),
+      h("p", {}, h("b", {}, "วิธีทาย: "), "ตอนแท่ง Heikin Ashi ใหม่เปิด ถ้าราคาจริงอยู่สูงกว่าราคาเปิดของแท่งนั้น → ทายว่าจบเป็นแท่งขึ้น, ต่ำกว่า → แท่งลง"),
+      h("ul", {},
+        h("li", {}, `ถ้าทายเฉพาะตอนที่ราคาห่างจากราคาเปิดของแท่งอย่างชัดเจน (${avg((x) => x.farShare).toFixed(0)}% ของแท่ง) จะถูก ${avg((x) => x.farPct).toFixed(1)}%`),
+        h("li", {}, h("b", {}, "ข้อควรรู้: "), `การทายชุดเดียวกัน เมื่อวัดกับราคาจริงของนาทีนั้น ถูกแค่ ${avg((x) => x.realPct).toFixed(1)}% — `,
+          "แท่ง Heikin Ashi เป็นค่าเฉลี่ย ราคาเปิดของแท่งคือจุดกึ่งกลางของแท่งก่อน ไม่ใช่ราคาที่ซื้อขายได้ ความแม่นนี้จึงมาจากสูตรของแท่ง ไม่ได้แปลว่ารู้ว่าราคาจริงจะไปทางไหน"))),
+    h("div", { class: "table-wrap" }, h("table", {},
+      h("thead", {}, h("tr", {}, ["ช่วง", "จำนวนแท่ง", "ทายถูก", "ทายถูกเมื่อราคาห่างชัดเจน", "สัดส่วนแท่งที่ชัดเจน", "ราคาจริงไปตามที่ทาย", "รอบ"].map((t, i) => h("th", { class: i ? "num" : null }, t)))),
+      h("tbody", {},
+        rows.map((x) => h("tr", { class: "link", tabindex: 0, onclick: () => location.href = `run.html?id=${x.r.id}` },
+          h("td", {}, `${date(x.r.date_from)} – ${date(x.r.date_to)}`),
+          h("td", { class: "num" }, x.bars.toLocaleString("en-US")),
+          cell(x.pct), cell(x.farPct), cell(x.farShare), cell(x.realPct),
+          h("td", { class: "num" }, `#${x.r.id}`))),
+        h("tr", { class: "group" }, h("td", {}, "รวมทุกช่วง"), h("td", { class: "num" }, bars.toLocaleString("en-US")),
+          cell(avg((x) => x.pct)), cell(avg((x) => x.farPct)), cell(avg((x) => x.farShare)), cell(avg((x) => x.realPct)), h("td", {}))))));
+}
+
 async function scalpSection() {
   const [s3d, nyv] = await Promise.all([tickRuns("SCALP_S3D"), tickRuns("NY_VALUE")]);
   const { latest, stop } = s3d;
@@ -194,7 +236,7 @@ async function scalpSection() {
 
 async function load() {
   mountJobs();
-  const scalp = await scalpSection();
+  const [heikin, scalp] = await Promise.all([heikinSection(), scalpSection()]);
   const { data: runs, error } = await sb.from("backtest_runs")
     .select("*, strategy:strategies!inner(id, code, version, name, theory)")
     .eq("strategy.code", CODE).order("created_at", { ascending: false }).limit(200);
@@ -204,7 +246,7 @@ async function load() {
   const found = PERIODS.map((p) => ({ p, run: mine.find((r) => (r.date_from ?? "") >= p.from && (r.date_from ?? "") < p.to) })).filter((x) => x.run);
   const main = $("#main"), jobs = $("#main .jobs");
   if (found.length < PERIODS.length) {
-    main.replaceChildren(jobs, scalp, h("h1", {}, "สรุป"), h("p", { class: "empty" }, "ยังไม่มีผลทดสอบของทฤษฎีตัวเต็งครบทั้ง 3 ช่วง"));
+    main.replaceChildren(jobs, heikin, scalp, h("h1", {}, "สรุป"), h("p", { class: "empty" }, "ยังไม่มีผลทดสอบของทฤษฎีตัวเต็งครบทั้ง 3 ช่วง"));
     return;
   }
   const files = await Promise.all(found.map((x) => labApi(`/runs/${x.run.id}/file`)));
@@ -214,6 +256,7 @@ async function load() {
 
   main.replaceChildren(
     jobs,
+    heikin,
     scalp,
     h("div", {},
       h("h1", {}, "ถือข้ามช่วงเวลา (บัญชี 1,000 ดอลลาร์): กฎ R1"),

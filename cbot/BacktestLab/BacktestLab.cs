@@ -391,11 +391,18 @@ namespace cAlgo.Robots
                     profitFactor = grossLoss < 0 ? Round(grossWin / -grossLoss) : (double?)null,
                     maxDdPct = Round(_equity.MaxDrawdownPct),
                     machine = Environment.MachineName,
-                    note = string.IsNullOrWhiteSpace(RunNote) ? null : RunNote,
+                    note = Note(),
                 },
                 trades = TradeRows(trades),
                 equity = _equity.Points,   // [[unixSeconds, equity], ...]
             };
+        }
+
+        /// <summary>โน้ตของรอบทดสอบ: ข้อความสรุปของทฤษฎี (ถ้ามี) ตามด้วยโน้ตที่ผู้รันใส่</summary>
+        private string Note()
+        {
+            var parts = new[] { _strategy.ReportNote, RunNote }.Where(s => !string.IsNullOrWhiteSpace(s)).ToArray();
+            return parts.Length == 0 ? null : string.Join(" — ", parts);
         }
 
         private List<Dictionary<string, object>> TradeRows(List<HistoricalTrade> trades)
