@@ -20,6 +20,10 @@ supabase/migrations/*.sql    ส่วนเพิ่มของ schema (เช
 supabase/functions/lab/      Edge Function: /ingest, /progress, /runs, /runs/:id (GET, DELETE), /runs/:id/file, /health
 docs/                        เว็บ (GitHub Pages): summary (สรุป), index, run, strategies, chart (ทฤษฎีกราฟ), daystudy (สถิติรายวัน) + app.js, config.js
 docs/data/daystudy-*.json    ผลสถิติรายวัน (สร้างโดย tools\day-study.ps1; เป็นไฟล์สาธารณะ)
+docs/ha-examples.js          ภาพตัวอย่างวิธีทายทิศแท่ง Heikin Ashi บนหน้า summary (สองจังหวะ: ตอนทาย / เมื่อแท่งจบ) — ข้อมูลจริงจาก
+                             docs/data/ha-examples.json ซึ่ง `Phase1.exe study:ha` เขียนให้; ไม่พึ่ง app.js จึงดูได้โดยไม่ล็อกอิน
+tools/serve-docs.ps1         เซิร์ฟเวอร์ในเครื่อง (http://localhost:8123/) สำหรับดูหน้าเว็บก่อน push; หน้าทดสอบที่ไม่ต้องล็อกอินอยู่ใน tools/preview/
+                             (ใช้กับ preview ของ Claude ผ่าน .claude/launch.json ชื่อ docs-preview — ไฟล์นี้ไม่อยู่ใน repo)
 tools/sync-cbot.ps1          ก๊อปซอร์สไป Documents\cAlgo\Sources\Robots\BacktestLab\BacktestLab + สร้าง config
 tools/backtest.ps1           รัน backtest 1 รอบผ่าน cTrader CLI (เพิ่ม -Build เพื่อ sync + build ก่อน)
 tools/day-study.ps1          สถิติ "วันนี้ของสัปดาห์ + ทรงนี้ → ขึ้น/ลงกี่ %" จาก CSV ของ DATA_EXPORT (-From/-To จำกัดช่วง)

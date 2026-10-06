@@ -12,6 +12,7 @@
 import Chart from "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/auto/+esm";
 import { sb, requireSession, labApi, h, $, money, pct, num, date, dateTime, signClass, showError,
   WEEKDAYS, tradeStats, weekdayStats, splitBar, mountJobs } from "./app.js";
+import { renderHaExamples } from "./ha-examples.js";
 
 // ---------- ทฤษฎีที่กำลังเป็นตัวเต็ง (ดู research/JOURNAL.md ใน repo) ----------
 // ตัวเลขทั้งหมดในหน้าคำนวณจากผลทดสอบจริงใน lab; กฎถูกล็อกจากช่วง "สำรวจ" ก่อนเปิดดูสองช่วงหลัง
@@ -163,6 +164,8 @@ async function heikinSection() {
   const bars = rows.reduce((s, x) => s + x.bars, 0);
   const avg = (f) => rows.reduce((s, x) => s + f(x) * x.bars, 0) / bars;
   const cell = (v) => h("td", { class: "num" }, `${v.toFixed(2)}%`);
+  const examples = h("section", { class: "stack" });           // ภาพตัวอย่างจากข้อมูลจริง (ha-examples.js) — ว่างไว้ถ้าโหลดไม่ได้
+  renderHaExamples(examples);
   return h("section", { class: "stack" },
     h("div", {},
       h("h1", {}, "ทักษะการทำนาย: แท่ง Heikin Ashi 1 นาที"),
@@ -174,6 +177,8 @@ async function heikinSection() {
         h("li", {}, `ถ้าทายเฉพาะตอนที่ราคาห่างจากราคาเปิดของแท่งอย่างชัดเจน (${avg((x) => x.farShare).toFixed(0)}% ของแท่ง) จะถูก ${avg((x) => x.farPct).toFixed(1)}%`),
         h("li", {}, h("b", {}, "ข้อควรรู้: "), `การทายชุดเดียวกัน เมื่อวัดกับราคาจริงของนาทีนั้น ถูกแค่ ${avg((x) => x.realPct).toFixed(1)}% — `,
           "แท่ง Heikin Ashi เป็นค่าเฉลี่ย ราคาเปิดของแท่งคือจุดกึ่งกลางของแท่งก่อน ไม่ใช่ราคาที่ซื้อขายได้ ความแม่นนี้จึงมาจากสูตรของแท่ง ไม่ได้แปลว่ารู้ว่าราคาจริงจะไปทางไหน"))),
+    examples,
+    h("h2", {}, "ผล backtest ใน cTrader รายช่วง"),
     h("div", { class: "table-wrap" }, h("table", {},
       h("thead", {}, h("tr", {}, ["ช่วง", "จำนวนแท่ง", "ทายถูก", "ทายถูกเมื่อราคาห่างชัดเจน", "สัดส่วนแท่งที่ชัดเจน", "ราคาจริงไปตามที่ทาย", "รอบ"].map((t, i) => h("th", { class: i ? "num" : null }, t)))),
       h("tbody", {},

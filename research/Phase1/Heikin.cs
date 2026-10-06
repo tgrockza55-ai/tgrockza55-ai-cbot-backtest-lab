@@ -93,6 +93,42 @@ static partial class Phase1
         for (int c = 0; c < cover.Length; c++)
             Console.WriteLine($"  distance >= {cover[c]:0.0}: calls {100.0 * covN[c] / total,5:N1}% of the bars, right {100.0 * covRight[c] / Math.Max(1, covN[c]):N2}%");
         if (haveModel) Console.WriteLine("\nweights of the last model (standardised): " + string.Join("  ", new[] { "priceVsHaOpen", "lastHaBody", "ret1", "ret5", "closeInBar", "streak", "priceVsLastHaClose", "volume", "lastRange", "priceVsHaOpen^2" }.Select((name, k) => $"{name} {w[k]:+0.00;-0.00}")));
+
+        WriteHeikinExamples(ho, hc, usual);
+    }
+
+    /// <summary>
+    /// Three real cases for the picture on the summary page (docs\data\ha-examples.json): a clear call up that was right, a clear call down
+    /// that was right, and a close call that was wrong. Taken from the most recent data, each from a different day, 07:00-17:00 UTC.
+    /// Each case: 15 Heikin-Ashi bars before the call, then the bar that was called.
+    /// </summary>
+    static void WriteHeikinExamples(double[] ho, double[] hc, double[] usual)
+    {
+        var repo = FindRepo(); if (repo == null) return;
+        int n = T.Length; const int Before = 15;
+        var picked = new List<(string kind, int i)>(); var days = new HashSet<long>();
+        foreach (var kind in new[] { "up", "down", "wrong" })
+            for (int i = n - 2; i > 400; i--)
+            {
+                long hour = T[i] % 86400 / 3600; if (hour < 7 || hour >= 17 || days.Contains(T[i] / 86400) || T[i] - T[i - Before] != Before * 60) continue;
+                double u = usual[i - 1]; if (u <= 0) continue;
+                double d = (O[i] - ho[i]) / u, body = (hc[i] - ho[i]) / u;
+                bool ok = kind == "up" ? d >= 0.6 && d <= 1.2 && body >= 0.5
+                        : kind == "down" ? d <= -0.6 && d >= -1.2 && body <= -0.5
+                        : Math.Abs(d) >= 0.08 && Math.Abs(d) <= 0.25 && Math.Sign(body) == -Math.Sign(d) && Math.Abs(body) >= 0.35;
+                if (!ok) continue;
+                picked.Add((kind, i)); days.Add(T[i] / 86400); break;
+            }
+        string N(double v) => Math.Round(v, 3).ToString(Inv);
+        var items = picked.Select(p =>
+        {
+            int i = p.i;
+            var bars = Enumerable.Range(i - Before, Before + 1).Select(j => $"[{T[j]},{N(ho[j])},{N(Math.Max(H[j], Math.Max(ho[j], hc[j])))},{N(Math.Min(L[j], Math.Min(ho[j], hc[j])))},{N(hc[j])}]");
+            return $"{{\"kind\":\"{p.kind}\",\"time\":{T[i]},\"open\":{N(O[i])},\"haOpen\":{N(ho[i])},\"call\":{(O[i] > ho[i] ? 1 : -1)},\"result\":{(hc[i] > ho[i] ? 1 : -1)},\"bars\":[{string.Join(",", bars)}]}}";
+        });
+        var file = System.IO.Path.Combine(repo, "docs", "data", "ha-examples.json");
+        System.IO.File.WriteAllText(file, "{\"symbol\":\"" + SymbolName + "\",\"examples\":[" + string.Join(",", items) + "]}");
+        Console.WriteLine($"\nwrote {picked.Count} example(s) to {file}");
     }
 
     /// <summary>Logistic regression by Newton steps (IRLS) on standardised inputs; w[K] is the intercept.</summary>

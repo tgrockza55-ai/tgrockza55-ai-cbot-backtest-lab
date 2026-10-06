@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ทดสอบภาพตัวอย่าง Heikin Ashi</title>
+  <link rel="stylesheet" href="/docs/style.css">
+</head>
+<body>
+<!-- หน้าทดสอบในเครื่อง (ไม่อยู่บนเว็บ): tools\serve-docs.ps1 แล้วเปิด http://localhost:8123/tools/preview/ha-examples.html -->
+<main class="stack"><section class="stack" id="ha"></section></main>
+<script type="module">
+import { renderHaExamples } from "/docs/ha-examples.js";
+await renderHaExamples(document.getElementById("ha"), "/docs/data/ha-examples.json");
+</script>
+</body>
+</html>
