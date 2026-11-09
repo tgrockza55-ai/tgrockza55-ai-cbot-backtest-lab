@@ -1,40 +1,40 @@
 {
-  "watchdog_heartbeat_utc": "2026-11-08T16:53:29.997699+00:00",
-  "daemon_uptime_seconds": 1098,
+  "watchdog_heartbeat_utc": "2026-11-09T19:16:18.865069+00:00",
+  "daemon_uptime_seconds": 396,
   "active_supervisors": 3,
   "symbols": {
     "BTCUSD": {
       "symbol": "BTCUSD",
       "status": "RECORDING_ACTIVE",
-      "pid": 18436,
-      "uptime_seconds": 900,
-      "restart_count": 1,
+      "pid": 10232,
+      "uptime_seconds": 396,
+      "restart_count": 0,
       "has_fresh_ticks": true,
-      "last_fresh_mtime_utc": "2026-11-08T16:53:29.623812+00:00",
-      "last_stoppage_utc": "2026-11-08T16:38:26.720296+00:00",
-      "inactivity_or_warmup_seconds": 0
+      "last_fresh_mtime_utc": "2026-11-09T19:16:17.552802+00:00",
+      "last_stoppage_utc": null,
+      "inactivity_or_warmup_seconds": 1
     },
     "ETHUSD": {
       "symbol": "ETHUSD",
       "status": "RECORDING_ACTIVE",
-      "pid": 5752,
-      "uptime_seconds": 1098,
-      "restart_count": 0,
+      "pid": 10380,
+      "uptime_seconds": 198,
+      "restart_count": 1,
       "has_fresh_ticks": true,
-      "last_fresh_mtime_utc": "2026-11-08T16:53:28.753351+00:00",
-      "last_stoppage_utc": null,
+      "last_fresh_mtime_utc": "2026-11-09T19:16:17.443627+00:00",
+      "last_stoppage_utc": "2026-11-09T19:12:57.725801+00:00",
       "inactivity_or_warmup_seconds": 1
     },
     "XAUUSD": {
       "symbol": "XAUUSD",
-      "status": "WEEKEND_STANDBY",
-      "pid": null,
-      "uptime_seconds": 0,
-      "restart_count": 0,
-      "has_fresh_ticks": false,
-      "last_fresh_mtime_utc": null,
-      "last_stoppage_utc": null,
-      "inactivity_or_warmup_seconds": null
+      "status": "RECORDING_ACTIVE",
+      "pid": 7224,
+      "uptime_seconds": 90,
+      "restart_count": 1,
+      "has_fresh_ticks": true,
+      "last_fresh_mtime_utc": "2026-11-09T19:16:17.443627+00:00",
+      "last_stoppage_utc": "2026-11-09T19:14:45.793275+00:00",
+      "inactivity_or_warmup_seconds": 1
     }
   }
 }

@@ -5,7 +5,7 @@
   "symbols_evaluated": {
     "BTCUSD": 7715,
     "ETHUSD": 7654,
-    "XAUUSD": 6099
+    "XAUUSD": 7295
   },
   "champions": {
     "BTCUSD": {
@@ -74,52 +74,54 @@
     },
     "XAUUSD": {
       "strategy": {
-        "type": "DOM_ABSORPTION",
-        "imb_thresh": 0.035,
-        "sl_mult": 2.5,
-        "tp_mult": 2.8,
-        "smart_dom_exit": false,
-        "session_filter": "LONDON",
+        "type": "DOM_ABSORPTION_V2",
+        "imb_thresh": 0.02,
+        "sl_usd": 3.5,
+        "tp_usd": 7.0,
+        "reward_risk": 2.0,
+        "smart_dom_exit": true,
+        "session_filter": "LONDON_NY",
         "news_gate": true,
-        "use_be": true,
-        "spread_cap": 35.0
+        "spread_ceiling": 0.2
       },
       "metrics": {
-        "trades": 12,
-        "wins": 3,
-        "losses": 9,
-        "win_rate": 25.0,
-        "net_pnl": -0.83,
-        "profit_factor": 0.1,
-        "max_dd": 0.89,
-        "active_days": 5,
-        "positive_days": 1,
-        "daily_win_rate": 20.0,
+        "trades": 78,
+        "wins": 38,
+        "losses": 40,
+        "win_rate": 48.7,
+        "net_pnl": 35.48,
+        "profit_factor": 1.25,
+        "max_dd": 8.69,
+        "active_days": 6,
+        "positive_days": 5,
+        "daily_win_rate": 83.3,
         "daily_pnl": {
-          "2026-10-05": -0.18391571428572254,
-          "2026-11-02": -0.17970214285714442,
-          "2026-11-03": 0.026949999999999447,
-          "2026-11-05": -0.23309714285714314,
-          "2026-11-06": -0.258157857142856
+          "2026-10-05": 11.9,
+          "2026-11-02": 0.82,
+          "2026-11-04": -0.2,
+          "2026-11-05": 13.76,
+          "2026-11-06": 2.39,
+          "2026-11-09": 6.81
         }
       }
     }
   },
   "portfolio_ensemble": {
-    "total_trades": 72,
-    "net_profit_usd": 15.2,
-    "profit_factor": 1.9,
-    "total_days": 7,
-    "profitable_days": 6,
-    "daily_win_rate_pct": 85.7,
+    "total_trades": 138,
+    "net_profit_usd": 51.51,
+    "profit_factor": 1.74,
+    "total_days": 8,
+    "profitable_days": 7,
+    "daily_win_rate_pct": 87.5,
     "daily_breakdown": {
-      "2026-10-05": -0.18,
+      "2026-10-05": 11.9,
       "2026-11-01": 1.39,
-      "2026-11-02": 5.47,
+      "2026-11-02": 6.46,
       "2026-11-03": 2.76,
-      "2026-11-05": 3.49,
-      "2026-11-06": 2.02,
-      "2026-11-07": 0.26
+      "2026-11-04": -0.2,
+      "2026-11-05": 17.48,
+      "2026-11-06": 4.67,
+      "2026-11-09": 7.05
     }
   }
 }
