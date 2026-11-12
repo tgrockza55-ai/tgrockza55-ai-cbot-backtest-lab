@@ -1,6 +1,6 @@
 {
   "truth_reset_version": "v4.0.0-TRUTH-RESET",
-  "audit_timestamp": "2026-11-12T16:43:48.753524+00:00",
+  "audit_timestamp": "2026-11-12T16:53:50.996924+00:00",
   "data_source": "%LOCALAPPDATA%\\BacktestLab\\live",
   "account_number": "Pepperstone #5258778",
   "raw_files_audited": [
@@ -10,29 +10,29 @@
   ],
   "metrics_empirical": {
     "initial_deposit": 100.0,
-    "current_balance": 92.27,
-    "net_pnl_usd": -7.73,
-    "net_pnl_pct": -7.73,
+    "current_balance": 91.02,
+    "net_pnl_usd": -8.98,
+    "net_pnl_pct": -8.98,
     "gross_win_usd": 75.44,
-    "gross_loss_usd": 83.17,
-    "total_events_count": 168,
-    "total_closed_trades_N": 84,
+    "gross_loss_usd": 84.42,
+    "total_events_count": 170,
+    "total_closed_trades_N": 85,
     "wins_count": 31,
-    "losses_count": 53,
+    "losses_count": 54,
     "breakevens_count": 0,
-    "win_rate_pct": 36.9,
-    "profit_factor": 0.91,
-    "realized_sharpe_estimate": -1.95
+    "win_rate_pct": 36.5,
+    "profit_factor": 0.89,
+    "realized_sharpe_estimate": -2.25
   },
   "statistical_power": {
-    "sample_size_N": 84,
+    "sample_size_N": 85,
     "target_preliminary_N": 500,
     "target_institutional_N": 1200,
-    "power_progress_pct": 16.8,
-    "standard_error_sharpe": 0.186,
+    "power_progress_pct": 17.0,
+    "standard_error_sharpe": 0.204,
     "status": "CRITICALLY_UNDERPOWERED",
     "label": "ยังไม่สามารถสรุปผลได้ (Statistically Insignificant)",
-    "description": "จำนวนเทรดจริงสะสม N=84 ไม้ ค่าความคลาดเคลื่อนมาตรฐาน SE(SR)=±0.186 กว้างเกินกว่าจะพิสูจน์ความได้เปรียบ ต้องสะสมข้อมูลอย่างน้อย 500 ไม้",
+    "description": "จำนวนเทรดจริงสะสม N=85 ไม้ ค่าความคลาดเคลื่อนมาตรฐาน SE(SR)=±0.204 กว้างเกินกว่าจะพิสูจน์ความได้เปรียบ ต้องสะสมข้อมูลอย่างน้อย 500 ไม้",
     "mandate": "ห้ามสรุปผลกำไรหรือความได้เปรียบ (Edge) ของระบบ จนกว่าขนาดตัวอย่างจะครบ 500 ไม้เป็นอย่างน้อย"
   }
 }
